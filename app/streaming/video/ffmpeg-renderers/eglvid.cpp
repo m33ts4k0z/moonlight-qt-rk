@@ -9,6 +9,8 @@
 
 #include <Limelight.h>
 #include <unistd.h>
+#include <dlfcn.h>
+#include <cstring>
 
 #include <SDL_syswm.h>
 
@@ -185,6 +187,31 @@ AVPixelFormat EGLRenderer::getPreferredPixelFormat(int videoFormat)
 
 void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, int viewportHeight)
 {
+    // Mali blob workaround: Get function pointers for all GL calls
+    typedef void (*PFNGLBINDTEXTUREPROC)(GLenum target, GLuint texture);
+    typedef void (*PFNGLPIXELSTOREIPROC)(GLenum pname, GLint param);
+    typedef void (*PFNGLTEXIMAGE2DPROC)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void *pixels);
+    typedef void (*PFNGLBINDBUFFERPROC)(GLenum target, GLuint buffer);
+    typedef void (*PFNGLBUFFERDATAPROC)(GLenum target, GLsizeiptr size, const void *data, GLenum usage);
+    typedef void (*PFNGLUSEPROGRAMPROC)(GLuint program);
+    typedef void (*PFNGLVERTEXATTRIBPOINTERPROC)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
+    typedef void (*PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
+    typedef void (*PFNGLACTIVETEXTUREPROC)(GLenum texture);
+    typedef void (*PFNGLUNIFORM1IPROC)(GLint location, GLint v0);
+    typedef void (*PFNGLDRAWARRAYSPROC)(GLenum mode, GLint first, GLsizei count);
+
+    PFNGLBINDTEXTUREPROC glBindTextureFn = (PFNGLBINDTEXTUREPROC)SDL_GL_GetProcAddress("glBindTexture");
+    PFNGLPIXELSTOREIPROC glPixelStoreiFn = (PFNGLPIXELSTOREIPROC)SDL_GL_GetProcAddress("glPixelStorei");
+    PFNGLTEXIMAGE2DPROC glTexImage2DFn = (PFNGLTEXIMAGE2DPROC)SDL_GL_GetProcAddress("glTexImage2D");
+    PFNGLBINDBUFFERPROC glBindBufferFn = (PFNGLBINDBUFFERPROC)SDL_GL_GetProcAddress("glBindBuffer");
+    PFNGLBUFFERDATAPROC glBufferDataFn = (PFNGLBUFFERDATAPROC)SDL_GL_GetProcAddress("glBufferData");
+    PFNGLUSEPROGRAMPROC glUseProgramFn = (PFNGLUSEPROGRAMPROC)SDL_GL_GetProcAddress("glUseProgram");
+    PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointerFn = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
+    PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArrayFn = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
+    PFNGLACTIVETEXTUREPROC glActiveTextureFn = (PFNGLACTIVETEXTUREPROC)SDL_GL_GetProcAddress("glActiveTexture");
+    PFNGLUNIFORM1IPROC glUniform1iFn = (PFNGLUNIFORM1IPROC)SDL_GL_GetProcAddress("glUniform1i");
+    PFNGLDRAWARRAYSPROC glDrawArraysFn = (PFNGLDRAWARRAYSPROC)SDL_GL_GetProcAddress("glDrawArrays");
+
     // Do nothing if this overlay is disabled
     if (!Session::get()->getOverlayManager().isOverlayEnabled(type)) {
         return;
@@ -196,13 +223,13 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
         SDL_assert(!SDL_MUSTLOCK(newSurface));
         SDL_assert(newSurface->format->format == SDL_PIXELFORMAT_ARGB8888);
 
-        glBindTexture(GL_TEXTURE_2D, m_OverlayTextures[type]);
+        if (glBindTextureFn) glBindTextureFn(GL_TEXTURE_2D, m_OverlayTextures[type]);
 
         void* packedPixelData = nullptr;
         if (m_GlesMajorVersion >= 3 || m_HasExtUnpackSubimage) {
             // If we are GLES 3.0+ or have GL_EXT_unpack_subimage, GL can handle any pitch
             SDL_assert(newSurface->pitch % newSurface->format->BytesPerPixel == 0);
-            glPixelStorei(GL_UNPACK_ROW_LENGTH_EXT, newSurface->pitch / newSurface->format->BytesPerPixel);
+            if (glPixelStoreiFn) glPixelStoreiFn(GL_UNPACK_ROW_LENGTH_EXT, newSurface->pitch / newSurface->format->BytesPerPixel);
         }
         else if (newSurface->pitch != newSurface->w * newSurface->format->BytesPerPixel) {
             // If we can't use GL_UNPACK_ROW_LENGTH and the surface isn't tightly packed,
@@ -218,7 +245,7 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
                               newSurface->format->format, packedPixelData, newSurface->w * newSurface->format->BytesPerPixel);
         }
 
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, newSurface->w, newSurface->h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+        if (glTexImage2DFn) glTexImage2DFn(GL_TEXTURE_2D, 0, GL_RGBA, newSurface->w, newSurface->h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                      packedPixelData ? packedPixelData : newSurface->pixels);
 
         if (packedPixelData) {
@@ -260,8 +287,8 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
             {overlayRect.x + overlayRect.w, overlayRect.y + overlayRect.h, 1.0f, 0.0f}
         };
 
-        glBindBuffer(GL_ARRAY_BUFFER, m_OverlayVbos[type]);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+        if (glBindBufferFn) glBindBufferFn(GL_ARRAY_BUFFER, m_OverlayVbos[type]);
+        if (glBufferDataFn) glBufferDataFn(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
 
         SDL_AtomicSet(&m_OverlayHasValidData[type], 1);
     }
@@ -271,48 +298,111 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
         return;
     }
 
-    glUseProgram(m_OverlayShaderProgram);
+    if (glUseProgramFn) glUseProgramFn(m_OverlayShaderProgram);
 
-    glBindBuffer(GL_ARRAY_BUFFER, m_OverlayVbos[type]);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(OVERLAY_VERTEX), (void*)offsetof(OVERLAY_VERTEX, x));
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(OVERLAY_VERTEX), (void*)offsetof(OVERLAY_VERTEX, u));
-    glEnableVertexAttribArray(1);
+    if (glBindBufferFn) glBindBufferFn(GL_ARRAY_BUFFER, m_OverlayVbos[type]);
+    if (glVertexAttribPointerFn) glVertexAttribPointerFn(0, 2, GL_FLOAT, GL_FALSE, sizeof(OVERLAY_VERTEX), (void*)offsetof(OVERLAY_VERTEX, x));
+    if (glEnableVertexAttribArrayFn) glEnableVertexAttribArrayFn(0);
+    if (glVertexAttribPointerFn) glVertexAttribPointerFn(1, 2, GL_FLOAT, GL_FALSE, sizeof(OVERLAY_VERTEX), (void*)offsetof(OVERLAY_VERTEX, u));
+    if (glEnableVertexAttribArrayFn) glEnableVertexAttribArrayFn(1);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_OverlayTextures[type]);
-    glUniform1i(m_OverlayShaderProgramParams[OVERLAY_PARAM_TEXTURE], 0);
+    if (glActiveTextureFn) glActiveTextureFn(GL_TEXTURE0);
+    if (glBindTextureFn) glBindTextureFn(GL_TEXTURE_2D, m_OverlayTextures[type]);
+    if (glUniform1iFn) glUniform1iFn(m_OverlayShaderProgramParams[OVERLAY_PARAM_TEXTURE], 0);
 
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    if (glDrawArraysFn) glDrawArraysFn(GL_TRIANGLES, 0, 6);
 }
 
 int EGLRenderer::loadAndBuildShader(int shaderType,
                                     const char *file) {
-    GLuint shader = glCreateShader(shaderType);
-    if (!shader || shader == GL_INVALID_ENUM) {
-        EGL_LOG(Error, "Can't create shader: %d", glGetError());
+    // Mali blob workaround: Use SDL_GL_GetProcAddress to get function pointers
+    // SDL's GL symbols are NULL with Mali blob on Wayland
+    typedef GLuint (*PFNGLCREATESHADERPROC)(GLenum type);
+    typedef void (*PFNGLSHADERSOURCEPROC)(GLuint shader, GLsizei count, const GLchar *const*string, const GLint *length);
+    typedef void (*PFNGLCOMPILESHADERPROC)(GLuint shader);
+    typedef void (*PFNGLGETSHADERIVPROC)(GLuint shader, GLenum pname, GLint *params);
+    typedef void (*PFNGLGETSHADERINFOLOGPROC)(GLuint shader, GLsizei bufSize, GLsizei *length, GLchar *infoLog);
+    typedef void (*PFNGLDELETESHADERPROC)(GLuint shader);
+    typedef GLenum (*PFNGLGETERRORPROC)(void);
+    
+    PFNGLCREATESHADERPROC glCreateShaderFn = (PFNGLCREATESHADERPROC)SDL_GL_GetProcAddress("glCreateShader");
+    PFNGLSHADERSOURCEPROC glShaderSourceFn = (PFNGLSHADERSOURCEPROC)SDL_GL_GetProcAddress("glShaderSource");
+    PFNGLCOMPILESHADERPROC glCompileShaderFn = (PFNGLCOMPILESHADERPROC)SDL_GL_GetProcAddress("glCompileShader");
+    PFNGLGETSHADERIVPROC glGetShaderivFn = (PFNGLGETSHADERIVPROC)SDL_GL_GetProcAddress("glGetShaderiv");
+    PFNGLGETSHADERINFOLOGPROC glGetShaderInfoLogFn = (PFNGLGETSHADERINFOLOGPROC)SDL_GL_GetProcAddress("glGetShaderInfoLog");
+    PFNGLDELETESHADERPROC glDeleteShaderFn = (PFNGLDELETESHADERPROC)SDL_GL_GetProcAddress("glDeleteShader");
+    PFNGLGETERRORPROC glGetErrorFn = (PFNGLGETERRORPROC)SDL_GL_GetProcAddress("glGetError");
+    
+    if (!glCreateShaderFn || !glShaderSourceFn || !glCompileShaderFn || !glGetShaderivFn || !glGetShaderInfoLogFn) {
+        EGL_LOG(Error, "Failed to load GL functions via SDL_GL_GetProcAddress");
+        return 0;
+    }
+
+    // Clear any lingering GL errors
+    if (glGetErrorFn) {
+        GLenum priorError;
+        while ((priorError = glGetErrorFn()) != GL_NO_ERROR) {
+            EGL_LOG(Warn, "Clearing prior GL error: 0x%x", priorError);
+        }
+    }
+
+    GLuint shader = glCreateShaderFn(shaderType);
+    if (!shader) {
+        EGL_LOG(Error, "glCreateShader(%d) returned 0", shaderType);
         return 0;
     }
 
     auto sourceData = Path::readDataFile(file);
+    if (sourceData.isEmpty()) {
+        EGL_LOG(Error, "Shader file \"%s\" is empty or could not be read", file);
+        if (glDeleteShaderFn) glDeleteShaderFn(shader);
+        return 0;
+    }
+    
     GLint len = sourceData.size();
     const char *buf = sourceData.data();
 
-    glShaderSource(shader, 1, &buf, &len);
-    glCompileShader(shader);
+    glShaderSourceFn(shader, 1, &buf, &len);
+    glCompileShaderFn(shader);
     GLint status;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+    glGetShaderivFn(shader, GL_COMPILE_STATUS, &status);
     if (!status) {
         char shaderLog[512];
-        glGetShaderInfoLog(shader, sizeof (shaderLog), nullptr, shaderLog);
+        glGetShaderInfoLogFn(shader, sizeof (shaderLog), nullptr, shaderLog);
         EGL_LOG(Error, "Cannot load shader \"%s\": %s", file, shaderLog);
+        if (glDeleteShaderFn) glDeleteShaderFn(shader);
         return 0;
     }
 
+    EGL_LOG(Info, "Successfully compiled shader \"%s\"", file);
     return shader;
 }
 
 unsigned EGLRenderer::compileShader(const char* vertexShaderSrc, const char* fragmentShaderSrc) {
+    // Mali blob workaround: Use SDL_GL_GetProcAddress for all GL functions
+    typedef GLuint (*PFNGLCREATEPROGRAMPROC)(void);
+    typedef void (*PFNGLATTACHSHADERPROC)(GLuint program, GLuint shader);
+    typedef void (*PFNGLBINDATTRIBLOCATIONPROC)(GLuint program, GLuint index, const GLchar *name);
+    typedef void (*PFNGLLINKPROGRAMPROC)(GLuint program);
+    typedef void (*PFNGLGETPROGRAMIVPROC)(GLuint program, GLenum pname, GLint *params);
+    typedef void (*PFNGLGETPROGRAMINFOLOGPROC)(GLuint program, GLsizei bufSize, GLsizei *length, GLchar *infoLog);
+    typedef void (*PFNGLDELETEPROGRAMPROC)(GLuint program);
+    typedef void (*PFNGLDELETESHADERPROC)(GLuint shader);
+    
+    PFNGLCREATEPROGRAMPROC glCreateProgramFn = (PFNGLCREATEPROGRAMPROC)SDL_GL_GetProcAddress("glCreateProgram");
+    PFNGLATTACHSHADERPROC glAttachShaderFn = (PFNGLATTACHSHADERPROC)SDL_GL_GetProcAddress("glAttachShader");
+    PFNGLBINDATTRIBLOCATIONPROC glBindAttribLocationFn = (PFNGLBINDATTRIBLOCATIONPROC)SDL_GL_GetProcAddress("glBindAttribLocation");
+    PFNGLLINKPROGRAMPROC glLinkProgramFn = (PFNGLLINKPROGRAMPROC)SDL_GL_GetProcAddress("glLinkProgram");
+    PFNGLGETPROGRAMIVPROC glGetProgramivFn = (PFNGLGETPROGRAMIVPROC)SDL_GL_GetProcAddress("glGetProgramiv");
+    PFNGLGETPROGRAMINFOLOGPROC glGetProgramInfoLogFn = (PFNGLGETPROGRAMINFOLOGPROC)SDL_GL_GetProcAddress("glGetProgramInfoLog");
+    PFNGLDELETEPROGRAMPROC glDeleteProgramFn = (PFNGLDELETEPROGRAMPROC)SDL_GL_GetProcAddress("glDeleteProgram");
+    PFNGLDELETESHADERPROC glDeleteShaderFn = (PFNGLDELETESHADERPROC)SDL_GL_GetProcAddress("glDeleteShader");
+    
+    if (!glCreateProgramFn || !glAttachShaderFn || !glBindAttribLocationFn || !glLinkProgramFn || !glGetProgramivFn || !glGetProgramInfoLogFn) {
+        EGL_LOG(Error, "Failed to load GL program functions via SDL_GL_GetProcAddress");
+        return 0;
+    }
+    
     unsigned shader = 0;
 
     GLuint vertexShader = loadAndBuildShader(GL_VERTEX_SHADER, vertexShaderSrc);
@@ -323,29 +413,36 @@ unsigned EGLRenderer::compileShader(const char* vertexShaderSrc, const char* fra
     if (!fragmentShader)
         goto fragError;
 
-    shader = glCreateProgram();
+    shader = glCreateProgramFn();
     if (!shader) {
         EGL_LOG(Error, "Cannot create shader program");
         goto progFailCreate;
     }
 
-    glAttachShader(shader, vertexShader);
-    glAttachShader(shader, fragmentShader);
-    glLinkProgram(shader);
+    glAttachShaderFn(shader, vertexShader);
+    glAttachShaderFn(shader, fragmentShader);
+    
+    // Bind attribute locations before linking (must match vertex shader attributes)
+    glBindAttribLocationFn(shader, 0, "aPosition");
+    glBindAttribLocationFn(shader, 1, "aTexCoord");
+    
+    glLinkProgramFn(shader);
     int status;
-    glGetProgramiv(shader, GL_LINK_STATUS, &status);
+    glGetProgramivFn(shader, GL_LINK_STATUS, &status);
     if (!status) {
         char shader_log[512];
-        glGetProgramInfoLog(shader, sizeof (shader_log), nullptr, shader_log);
+        glGetProgramInfoLogFn(shader, sizeof (shader_log), nullptr, shader_log);
         EGL_LOG(Error, "Cannot link shader program: %s", shader_log);
-        glDeleteProgram(shader);
+        if (glDeleteProgramFn) glDeleteProgramFn(shader);
         shader = 0;
+    } else {
+        EGL_LOG(Info, "Successfully linked shader program");
     }
 
 progFailCreate:
-    glDeleteShader(fragmentShader);
+    if (glDeleteShaderFn) glDeleteShaderFn(fragmentShader);
 fragError:
-    glDeleteShader(vertexShader);
+    if (glDeleteShaderFn) glDeleteShaderFn(vertexShader);
     return shader;
 }
 
@@ -355,6 +452,15 @@ bool EGLRenderer::compileShaders() {
 
     SDL_assert(m_EGLImagePixelFormat != AV_PIX_FMT_NONE);
 
+    // Mali blob workaround: Get glGetUniformLocation via SDL_GL_GetProcAddress
+    typedef GLint (*PFNGLGETUNIFORMLOCATIONPROC)(GLuint program, const GLchar *name);
+    PFNGLGETUNIFORMLOCATIONPROC glGetUniformLocationFn = (PFNGLGETUNIFORMLOCATIONPROC)SDL_GL_GetProcAddress("glGetUniformLocation");
+    
+    if (!glGetUniformLocationFn) {
+        EGL_LOG(Error, "Failed to get glGetUniformLocation function pointer");
+        return false;
+    }
+
     // XXX: TODO: other formats
     if (m_EGLImagePixelFormat == AV_PIX_FMT_NV12 || m_EGLImagePixelFormat == AV_PIX_FMT_P010) {
         m_ShaderProgram = compileShader("egl_nv12.vert", "egl_nv12.frag");
@@ -362,10 +468,10 @@ bool EGLRenderer::compileShaders() {
             return false;
         }
 
-        m_ShaderProgramParams[NV12_PARAM_YUVMAT] = glGetUniformLocation(m_ShaderProgram, "yuvmat");
-        m_ShaderProgramParams[NV12_PARAM_OFFSET] = glGetUniformLocation(m_ShaderProgram, "offset");
-        m_ShaderProgramParams[NV12_PARAM_PLANE1] = glGetUniformLocation(m_ShaderProgram, "plane1");
-        m_ShaderProgramParams[NV12_PARAM_PLANE2] = glGetUniformLocation(m_ShaderProgram, "plane2");
+        m_ShaderProgramParams[NV12_PARAM_YUVMAT] = glGetUniformLocationFn(m_ShaderProgram, "yuvmat");
+        m_ShaderProgramParams[NV12_PARAM_OFFSET] = glGetUniformLocationFn(m_ShaderProgram, "offset");
+        m_ShaderProgramParams[NV12_PARAM_PLANE1] = glGetUniformLocationFn(m_ShaderProgram, "plane1");
+        m_ShaderProgramParams[NV12_PARAM_PLANE2] = glGetUniformLocationFn(m_ShaderProgram, "plane2");
     }
     else if (m_EGLImagePixelFormat == AV_PIX_FMT_DRM_PRIME) {
         m_ShaderProgram = compileShader("egl_opaque.vert", "egl_opaque.frag");
@@ -373,7 +479,7 @@ bool EGLRenderer::compileShaders() {
             return false;
         }
 
-        m_ShaderProgramParams[OPAQUE_PARAM_TEXTURE] = glGetUniformLocation(m_ShaderProgram, "uTexture");
+        m_ShaderProgramParams[OPAQUE_PARAM_TEXTURE] = glGetUniformLocationFn(m_ShaderProgram, "uTexture");
     }
     else {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -388,7 +494,7 @@ bool EGLRenderer::compileShaders() {
         return false;
     }
 
-    m_OverlayShaderProgramParams[OVERLAY_PARAM_TEXTURE] = glGetUniformLocation(m_OverlayShaderProgram, "uTexture");
+    m_OverlayShaderProgramParams[OVERLAY_PARAM_TEXTURE] = glGetUniformLocationFn(m_OverlayShaderProgram, "uTexture");
 
     return true;
 }
@@ -415,15 +521,37 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
         EGL_LOG(Info, "EGL doesn't support HDR rendering");
         return false;
     }
+    
+    // WORKAROUND: Mali blob driver on Wayland has a bug where SDL can't load GL function pointers
+    // Disable EGL renderer entirely and let moonlight fall back to another renderer
+    if (qgetenv("MALI_DISABLE_EGL") == "1") {
+        EGL_LOG(Warn, "EGL renderer disabled by MALI_DISABLE_EGL environment variable");
+        EGL_LOG(Warn, "This works around Mali blob + SDL + Wayland GL function loading bug");
+        m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
+        return false;
+    }
 
     // This hint will ensure we use EGL to retrieve our GL context,
     // even on X11 where that is not the default. EGL is required
     // to avoid a crash in Mesa.
     // https://gitlab.freedesktop.org/mesa/mesa/issues/1011
     SDL_SetHint(SDL_HINT_OPENGL_ES_DRIVER, "1");
+    
+    // SDL_GL_LoadLibrary is required for context creation
+    if (SDL_GL_LoadLibrary(nullptr) != 0) {
+        EGL_LOG(Error, "SDL_GL_LoadLibrary() failed: %s", SDL_GetError());
+        m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
+        return false;
+    }
+    EGL_LOG(Info, "SDL_GL_LoadLibrary() succeeded");
+    
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    
+    // Request GLES 3.0 context
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    
+    EGL_LOG(Info, "Requesting OpenGL ES 3.0 context");
 
     int renderIndex;
     int maxRenderers = SDL_GetNumRenderDrivers();
@@ -484,14 +612,93 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
 
     if (!(m_Context = SDL_GL_CreateContext(params->window))) {
         EGL_LOG(Error, "Cannot create OpenGL context: %s", SDL_GetError());
+        EGLint eglErr = eglGetError();
+        EGL_LOG(Error, "eglGetError() after SDL_GL_CreateContext() failure: 0x%x", eglErr);
         m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
         return false;
     }
+    
+    EGL_LOG(Info, "SDL_GL_CreateContext() succeeded, context = %p", m_Context);
+    
     if (SDL_GL_MakeCurrent(params->window, m_Context)) {
         EGL_LOG(Error, "Cannot use created EGL context: %s", SDL_GetError());
+        EGLint eglErr = eglGetError();
+        EGL_LOG(Error, "eglGetError() after SDL_GL_MakeCurrent() failure: 0x%x", eglErr);
         m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
         return false;
     }
+    
+    EGL_LOG(Info, "SDL_GL_MakeCurrent() succeeded in initialize()");
+    
+    // Get EGL context info
+    EGLContext currentCtx = eglGetCurrentContext();
+    EGLDisplay currentDpy = eglGetCurrentDisplay();
+    EGLSurface currentDraw = eglGetCurrentSurface(EGL_DRAW);
+    EGLSurface currentRead = eglGetCurrentSurface(EGL_READ);
+    
+    EGL_LOG(Info, "eglGetCurrentContext() = %p", currentCtx);
+    EGL_LOG(Info, "eglGetCurrentDisplay() = %p", currentDpy);
+    EGL_LOG(Info, "eglGetCurrentSurface(DRAW) = %p", currentDraw);
+    EGL_LOG(Info, "eglGetCurrentSurface(READ) = %p", currentRead);
+    
+    // Query EGL version and client APIs
+    EGLint eglMajor = 0;
+    eglQueryContext(currentDpy, currentCtx, EGL_CONTEXT_CLIENT_VERSION, &eglMajor);
+    const char* eglVendor = eglQueryString(currentDpy, EGL_VENDOR);
+    const char* eglVersion = eglQueryString(currentDpy, EGL_VERSION);
+    const char* eglAPIs = eglQueryString(currentDpy, EGL_CLIENT_APIS);
+    
+    EGL_LOG(Info, "EGL Vendor: %s", eglVendor ? eglVendor : "NULL");
+    EGL_LOG(Info, "EGL Version: %s", eglVersion ? eglVersion : "NULL");
+    EGL_LOG(Info, "EGL Client APIs: %s", eglAPIs ? eglAPIs : "NULL");
+    EGL_LOG(Info, "EGL Context Client Version: %d", eglMajor);
+    
+    // Try to get the EGL config
+    EGLint configId = 0;
+    eglQueryContext(currentDpy, currentCtx, EGL_CONFIG_ID, &configId);
+    EGL_LOG(Info, "EGL Config ID: %d", configId);
+    
+    // Now try GL functions
+    const char* glVersion = (const char*)glGetString(GL_VERSION);
+    const char* glVendor = (const char*)glGetString(GL_VENDOR);
+    const char* glRenderer = (const char*)glGetString(GL_RENDERER);
+    GLenum glErr = glGetError();
+    
+    EGL_LOG(Info, "After glGetString() calls, glGetError() = 0x%x", glErr);
+    
+    if (!glVersion || !glVendor || !glRenderer) {
+        EGL_LOG(Warn, "SDL's GL function pointers are NULL - trying SDL_GL_GetProcAddress workaround");
+        EGL_LOG(Warn, "This is a known Mali blob issue on Wayland");
+        
+        // Mali blob + SDL + Wayland bug: SDL loads the library but doesn't bind functions
+        // Workaround: Use SDL_GL_GetProcAddress which internally uses eglGetProcAddress
+        typedef const GLubyte* (*PFNGLGETSTRINGPROC)(GLenum name);
+        PFNGLGETSTRINGPROC glGetStringAlt = (PFNGLGETSTRINGPROC)SDL_GL_GetProcAddress("glGetString");
+        
+        if (!glGetStringAlt) {
+            EGL_LOG(Error, "SDL_GL_GetProcAddress('glGetString') also failed!");
+            m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
+            return false;
+        }
+        
+        glVersion = (const char*)glGetStringAlt(GL_VERSION);
+        glVendor = (const char*)glGetStringAlt(GL_VENDOR);
+        glRenderer = (const char*)glGetStringAlt(GL_RENDERER);
+        
+        if (!glVersion || !glVendor || !glRenderer) {
+            EGL_LOG(Error, "Even SDL_GL_GetProcAddress version failed!");
+            m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
+            return false;
+        }
+        
+        EGL_LOG(Info, "SDL_GL_GetProcAddress workaround succeeded!");
+        EGL_LOG(Info, "GL functions are accessible via SDL_GL_GetProcAddress");
+    }
+    
+    EGL_LOG(Info, "GL context is valid and functional");
+    EGL_LOG(Info, "GL Vendor: %s", glVendor);
+    EGL_LOG(Info, "GL Renderer: %s", glRenderer);
+    EGL_LOG(Info, "GL Version: %s", glVersion);
 
     {
         int r, g, b, a;
@@ -610,43 +817,87 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
         SDL_GL_SetSwapInterval(0);
     }
 
-    glGenTextures(EGL_MAX_PLANES, m_Textures);
+    // Mali blob workaround: Get GL texture/blend functions via SDL_GL_GetProcAddress
+    typedef void (*PFNGLGENTEXTURESPROC)(GLsizei n, GLuint *textures);
+    typedef void (*PFNGLBINDTEXTUREPROC)(GLenum target, GLuint texture);
+    typedef void (*PFNGLTEXPARAMETERIPROC)(GLenum target, GLenum pname, GLint param);
+    typedef void (*PFNGLGENBUFFERSPROC)(GLsizei n, GLuint *buffers);
+    typedef void (*PFNGLENABLEPROC)(GLenum cap);
+    typedef void (*PFNGLBLENDFUNCPROC)(GLenum sfactor, GLenum dfactor);
+    typedef GLenum (*PFNGLGETERRORPROC)(void);
+    
+    PFNGLGENTEXTURESPROC glGenTexturesFn = (PFNGLGENTEXTURESPROC)SDL_GL_GetProcAddress("glGenTextures");
+    PFNGLBINDTEXTUREPROC glBindTextureFn = (PFNGLBINDTEXTUREPROC)SDL_GL_GetProcAddress("glBindTexture");
+    PFNGLTEXPARAMETERIPROC glTexParameteriFn = (PFNGLTEXPARAMETERIPROC)SDL_GL_GetProcAddress("glTexParameteri");
+    PFNGLGENBUFFERSPROC glGenBuffersFn = (PFNGLGENBUFFERSPROC)SDL_GL_GetProcAddress("glGenBuffers");
+    PFNGLENABLEPROC glEnableFn = (PFNGLENABLEPROC)SDL_GL_GetProcAddress("glEnable");
+    PFNGLBLENDFUNCPROC glBlendFuncFn = (PFNGLBLENDFUNCPROC)SDL_GL_GetProcAddress("glBlendFunc");
+    PFNGLGETERRORPROC glGetErrorFn = (PFNGLGETERRORPROC)SDL_GL_GetProcAddress("glGetError");
+    
+    if (!glGenTexturesFn || !glBindTextureFn || !glTexParameteriFn || 
+        !glGenBuffersFn || !glEnableFn || !glBlendFuncFn) {
+        EGL_LOG(Error, "Failed to get GL texture/blend function pointers in initialize()");
+        return false;
+    }
+    
+    glGenTexturesFn(EGL_MAX_PLANES, m_Textures);
     for (size_t i = 0; i < EGL_MAX_PLANES; ++i) {
-        glBindTexture(GL_TEXTURE_EXTERNAL_OES, m_Textures[i]);
-        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTextureFn(GL_TEXTURE_EXTERNAL_OES, m_Textures[i]);
+        glTexParameteriFn(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteriFn(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteriFn(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteriFn(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        
+        // Some drivers (Mali blob) may generate errors when setting parameters on external textures
+        // Clear any errors after each texture setup
+        if (glGetErrorFn) {
+            GLenum texErr = glGetErrorFn();
+            if (texErr != GL_NO_ERROR) {
+                EGL_LOG(Warn, "GL error after setting external texture %zu parameters: 0x%x", i, texErr);
+            }
+        }
     }
+    // Unbind to clean state
+    glBindTextureFn(GL_TEXTURE_EXTERNAL_OES, 0);
 
-    glGenBuffers(Overlay::OverlayMax, m_OverlayVbos);
-    glGenTextures(Overlay::OverlayMax, m_OverlayTextures);
+    glGenBuffersFn(Overlay::OverlayMax, m_OverlayVbos);
+    glGenTexturesFn(Overlay::OverlayMax, m_OverlayTextures);
     for (size_t i = 0; i < Overlay::OverlayMax; ++i) {
-        glBindTexture(GL_TEXTURE_2D, m_OverlayTextures[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTextureFn(GL_TEXTURE_2D, m_OverlayTextures[i]);
+        glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
+    // Unbind to clean state
+    glBindTextureFn(GL_TEXTURE_2D, 0);
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnableFn(GL_BLEND);
+    glBlendFuncFn(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    GLenum err = glGetError();
-    if (err != GL_NO_ERROR)
-        EGL_LOG(Error, "OpenGL error: %d", err);
+    // Check for any GL errors and clear them
+    // The Mali blob driver can be sensitive to lingering errors
+    bool hadError = false;
+    if (glGetErrorFn) {
+        GLenum err = glGetErrorFn();
+        while (err != GL_NO_ERROR) {
+            EGL_LOG(Warn, "OpenGL error during initialization: 0x%x", err);
+            hadError = true;
+            err = glGetErrorFn();
+        }
+    }
 
     // Detach the context from this thread, so the render thread can attach it
     SDL_GL_MakeCurrent(m_Window, nullptr);
 
-    if (err == GL_NO_ERROR) {
+    if (!hadError) {
         // If we got a working GL implementation via EGL, avoid using GLX from now on.
         // GLX will cause problems if we later want to use EGL again on this window.
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "EGL passed preflight checks. Using EGL for GL context creation.");
         SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
     }
 
-    return err == GL_NO_ERROR;
+    return !hadError;
 }
 
 const float *EGLRenderer::getColorOffsets(const AVFrame* frame) {
@@ -709,6 +960,33 @@ const float *EGLRenderer::getColorMatrix(const AVFrame* frame) {
 bool EGLRenderer::specialize() {
     SDL_assert(!m_VAO);
 
+    // Ensure context is current before compiling shaders
+    // This is critical for Mali blob driver
+    int makeCurrentResult = SDL_GL_MakeCurrent(m_Window, m_Context);
+    if (makeCurrentResult != 0) {
+        EGL_LOG(Error, "SDL_GL_MakeCurrent() failed in specialize(): %s (error code: %d)", 
+                SDL_GetError(), makeCurrentResult);
+        EGLint eglErr = eglGetError();
+        EGL_LOG(Error, "eglGetError() = 0x%x", eglErr);
+        return false;
+    }
+    
+    // Verify context is actually current
+    if (eglGetCurrentContext() == EGL_NO_CONTEXT) {
+        EGL_LOG(Error, "No EGL context is current after SDL_GL_MakeCurrent() in specialize()");
+        EGLint eglErr = eglGetError();
+        EGL_LOG(Error, "eglGetError() = 0x%x", eglErr);
+        return false;
+    }
+    
+    EGL_LOG(Info, "Context successfully made current in specialize()");
+    
+    // Clear any GL errors that may have occurred during texture/buffer setup
+    GLenum err;
+    while ((err = glGetError()) != GL_NO_ERROR) {
+        EGL_LOG(Warn, "Clearing GL error before shader compilation: 0x%x", err);
+    }
+
     if (!compileShaders())
         return false;
 
@@ -726,33 +1004,56 @@ bool EGLRenderer::specialize() {
         1, 2, 3,
     };
 
-    glUseProgram(m_ShaderProgram);
+    // Mali blob workaround: Get GL buffer/vertex functions
+    typedef void (*PFNGLUSEPROGRAMPROC)(GLuint program);
+    typedef void (*PFNGLGENBUFFERSPROC)(GLsizei n, GLuint *buffers);
+    typedef void (*PFNGLBINDBUFFERPROC)(GLenum target, GLuint buffer);
+    typedef void (*PFNGLBUFFERDATAPROC)(GLenum target, GLsizeiptr size, const void *data, GLenum usage);
+    typedef void (*PFNGLVERTEXATTRIBPOINTERPROC)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
+    typedef void (*PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
+    typedef void (*PFNGLDELETEBUFFERSPROC)(GLsizei n, const GLuint *buffers);
+    
+    PFNGLUSEPROGRAMPROC glUseProgramFn = (PFNGLUSEPROGRAMPROC)SDL_GL_GetProcAddress("glUseProgram");
+    PFNGLGENBUFFERSPROC glGenBuffersFn = (PFNGLGENBUFFERSPROC)SDL_GL_GetProcAddress("glGenBuffers");
+    PFNGLBINDBUFFERPROC glBindBufferFn = (PFNGLBINDBUFFERPROC)SDL_GL_GetProcAddress("glBindBuffer");
+    PFNGLBUFFERDATAPROC glBufferDataFn = (PFNGLBUFFERDATAPROC)SDL_GL_GetProcAddress("glBufferData");
+    PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointerFn = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
+    PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArrayFn = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
+    PFNGLDELETEBUFFERSPROC glDeleteBuffersFn = (PFNGLDELETEBUFFERSPROC)SDL_GL_GetProcAddress("glDeleteBuffers");
+    
+    if (!glUseProgramFn || !glGenBuffersFn || !glBindBufferFn || !glBufferDataFn || 
+        !glVertexAttribPointerFn || !glEnableVertexAttribArrayFn || !glDeleteBuffersFn) {
+        EGL_LOG(Error, "Failed to get GL buffer/vertex function pointers in specialize()");
+        return false;
+    }
+    
+    glUseProgramFn(m_ShaderProgram);
 
     unsigned int VBO, EBO;
     m_glGenVertexArraysOES(1, &m_VAO);
-    glGenBuffers(1, &VBO);
-    glGenBuffers(1, &EBO);
+    glGenBuffersFn(1, &VBO);
+    glGenBuffersFn(1, &EBO);
 
     m_glBindVertexArrayOES(m_VAO);
 
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof (vertices), vertices, GL_STATIC_DRAW);
+    glBindBufferFn(GL_ARRAY_BUFFER, VBO);
+    glBufferDataFn(GL_ARRAY_BUFFER, sizeof (vertices), vertices, GL_STATIC_DRAW);
 
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof (indices), indices, GL_STATIC_DRAW);
+    glBindBufferFn(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBufferDataFn(GL_ELEMENT_ARRAY_BUFFER, sizeof (indices), indices, GL_STATIC_DRAW);
 
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof (float)));
-    glEnableVertexAttribArray(1);
+    glVertexAttribPointerFn(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArrayFn(0);
+    glVertexAttribPointerFn(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof (float)));
+    glEnableVertexAttribArrayFn(1);
 
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBufferFn(GL_ARRAY_BUFFER, 0);
     m_glBindVertexArrayOES(0);
 
-    glDeleteBuffers(1, &VBO);
-    glDeleteBuffers(1, &EBO);
+    glDeleteBuffersFn(1, &VBO);
+    glDeleteBuffersFn(1, &EBO);
 
-    GLenum err = glGetError();
+    err = glGetError();
     if (err != GL_NO_ERROR) {
         EGL_LOG(Error, "OpenGL error: %d", err);
     }
@@ -791,10 +1092,18 @@ void EGLRenderer::prepareToRender()
 {
     SDL_GL_MakeCurrent(m_Window, m_Context);
     {
-        // Draw a black frame until the video stream starts rendering
-        glClearColor(0, 0, 0, 1);
-        glClear(GL_COLOR_BUFFER_BIT);
-        SDL_GL_SwapWindow(m_Window);
+        // Mali blob workaround: Get GL clear functions
+        typedef void (*PFNGLCLEARCOLORPROC)(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+        typedef void (*PFNGLCLEARPROC)(GLbitfield mask);
+        PFNGLCLEARCOLORPROC glClearColorFn = (PFNGLCLEARCOLORPROC)SDL_GL_GetProcAddress("glClearColor");
+        PFNGLCLEARPROC glClearFn = (PFNGLCLEARPROC)SDL_GL_GetProcAddress("glClear");
+        
+        if (glClearColorFn && glClearFn) {
+            // Draw a black frame until the video stream starts rendering
+            glClearColorFn(0, 0, 0, 1);
+            glClearFn(GL_COLOR_BUFFER_BIT);
+            SDL_GL_SwapWindow(m_Window);
+        }
     }
     SDL_GL_MakeCurrent(m_Window, nullptr);
 }
@@ -835,15 +1144,47 @@ void EGLRenderer::renderFrame(AVFrame* frame)
     }
 
     ssize_t plane_count = m_Backend->exportEGLImages(frame, m_EGLDisplay, imgs);
-    if (plane_count < 0)
+    if (plane_count < 0) {
+        EGL_LOG(Error, "exportEGLImages failed");
         return;
+    }
+    
+    // Mali blob workaround: Get GL function pointers via SDL_GL_GetProcAddress
+    typedef void (*PFNGLACTIVETEXTUREPROC)(GLenum texture);
+    typedef void (*PFNGLBINDTEXTUREPROC)(GLenum target, GLuint texture);
+    PFNGLACTIVETEXTUREPROC glActiveTextureFn = (PFNGLACTIVETEXTUREPROC)SDL_GL_GetProcAddress("glActiveTexture");
+    PFNGLBINDTEXTUREPROC glBindTextureFn = (PFNGLBINDTEXTUREPROC)SDL_GL_GetProcAddress("glBindTexture");
+    
+    if (!glActiveTextureFn || !glBindTextureFn) {
+        EGL_LOG(Error, "Failed to get glActiveTexture or glBindTexture function pointers");
+        return;
+    }
+    
+    EGL_LOG(Info, "exportEGLImages returned %d planes", (int)plane_count);
     for (ssize_t i = 0; i < plane_count; ++i) {
-        glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(GL_TEXTURE_EXTERNAL_OES, m_Textures[i]);
+        glActiveTextureFn(GL_TEXTURE0 + i);
+        EGL_LOG(Info, "Binding texture %d (GL_TEXTURE%d) to EGLImage %p", 
+                (int)i, (int)i, imgs[i]);
+        glBindTextureFn(GL_TEXTURE_EXTERNAL_OES, m_Textures[i]);
         m_glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, imgs[i]);
+        GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            EGL_LOG(Error, "Failed to bind texture %d: 0x%x", (int)i, err);
+        }
     }
 
-    glClear(GL_COLOR_BUFFER_BIT);
+    // Mali blob workaround: Get GL viewport/clear functions
+    typedef void (*PFNGLCLEARPROC)(GLbitfield mask);
+    typedef void (*PFNGLVIEWPORTPROC)(GLint x, GLint y, GLsizei width, GLsizei height);
+    PFNGLCLEARPROC glClearFn = (PFNGLCLEARPROC)SDL_GL_GetProcAddress("glClear");
+    PFNGLVIEWPORTPROC glViewportFn = (PFNGLVIEWPORTPROC)SDL_GL_GetProcAddress("glViewport");
+    
+    if (!glClearFn || !glViewportFn) {
+        EGL_LOG(Error, "Failed to get glClear or glViewport function pointers");
+        return;
+    }
+    
+    glClearFn(GL_COLOR_BUFFER_BIT);
 
     int drawableWidth, drawableHeight;
     SDL_GL_GetDrawableSize(m_Window, &drawableWidth, &drawableHeight);
@@ -856,28 +1197,69 @@ void EGLRenderer::renderFrame(AVFrame* frame)
     dst.w = drawableWidth;
     dst.h = drawableHeight;
     StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
-    glViewport(dst.x, dst.y, dst.w, dst.h);
+    glViewportFn(dst.x, dst.y, dst.w, dst.h);
 
-    glUseProgram(m_ShaderProgram);
+    // Mali blob workaround: Get GL render function pointers
+    typedef void (*PFNGLUSEPROGRAMPROC)(GLuint program);
+    typedef void (*PFNGLUNIFORM1IPROC)(GLint location, GLint v0);
+    typedef void (*PFNGLUNIFORM3FVPROC)(GLint location, GLsizei count, const GLfloat *value);
+    typedef void (*PFNGLUNIFORMMATRIX3FVPROC)(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value);
+    typedef void (*PFNGLDRAWELEMENTSPROC)(GLenum mode, GLsizei count, GLenum type, const void *indices);
+    
+    PFNGLUSEPROGRAMPROC glUseProgramFn = (PFNGLUSEPROGRAMPROC)SDL_GL_GetProcAddress("glUseProgram");
+    PFNGLUNIFORM1IPROC glUniform1iFn = (PFNGLUNIFORM1IPROC)SDL_GL_GetProcAddress("glUniform1i");
+    PFNGLUNIFORM3FVPROC glUniform3fvFn = (PFNGLUNIFORM3FVPROC)SDL_GL_GetProcAddress("glUniform3fv");
+    PFNGLUNIFORMMATRIX3FVPROC glUniformMatrix3fvFn = (PFNGLUNIFORMMATRIX3FVPROC)SDL_GL_GetProcAddress("glUniformMatrix3fv");
+    PFNGLDRAWELEMENTSPROC glDrawElementsFn = (PFNGLDRAWELEMENTSPROC)SDL_GL_GetProcAddress("glDrawElements");
+    
+    if (!glUseProgramFn || !glUniform1iFn || !glDrawElementsFn) {
+        EGL_LOG(Error, "Failed to get GL render function pointers");
+        return;
+    }
+    
+    glUseProgramFn(m_ShaderProgram);
     m_glBindVertexArrayOES(m_VAO);
 
     // Bind parameters for the shaders
     if (m_EGLImagePixelFormat == AV_PIX_FMT_NV12 || m_EGLImagePixelFormat == AV_PIX_FMT_P010) {
-        glUniformMatrix3fv(m_ShaderProgramParams[NV12_PARAM_YUVMAT], 1, GL_FALSE, getColorMatrix(frame));
-        glUniform3fv(m_ShaderProgramParams[NV12_PARAM_OFFSET], 1, getColorOffsets(frame));
-        glUniform1i(m_ShaderProgramParams[NV12_PARAM_PLANE1], 0);
-        glUniform1i(m_ShaderProgramParams[NV12_PARAM_PLANE2], 1);
+        if (glUniformMatrix3fvFn && glUniform3fvFn) {
+            glUniformMatrix3fvFn(m_ShaderProgramParams[NV12_PARAM_YUVMAT], 1, GL_FALSE, getColorMatrix(frame));
+            glUniform3fvFn(m_ShaderProgramParams[NV12_PARAM_OFFSET], 1, getColorOffsets(frame));
+            glUniform1iFn(m_ShaderProgramParams[NV12_PARAM_PLANE1], 0);
+            glUniform1iFn(m_ShaderProgramParams[NV12_PARAM_PLANE2], 1);
+            EGL_LOG(Info, "Set NV12 shader uniforms");
+        } else {
+            EGL_LOG(Error, "Failed to get NV12 uniform function pointers");
+            return;
+        }
     }
     else if (m_EGLImagePixelFormat == AV_PIX_FMT_DRM_PRIME) {
-        glUniform1i(m_ShaderProgramParams[OPAQUE_PARAM_TEXTURE], 0);
+        EGL_LOG(Info, "Setting DRM_PRIME shader uniform: uTexture location=%d, value=0", 
+                m_ShaderProgramParams[OPAQUE_PARAM_TEXTURE]);
+        glUniform1iFn(m_ShaderProgramParams[OPAQUE_PARAM_TEXTURE], 0);
+        GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            EGL_LOG(Error, "glUniform1i failed: 0x%x", err);
+        } else {
+            EGL_LOG(Info, "glUniform1i succeeded");
+        }
+    }
+    else {
+        EGL_LOG(Error, "Unknown pixel format %d (AV_PIX_FMT_DRM_PRIME=%d, AV_PIX_FMT_NV12=%d)", 
+                m_EGLImagePixelFormat, AV_PIX_FMT_DRM_PRIME, AV_PIX_FMT_NV12);
     }
 
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    EGL_LOG(Info, "Drawing triangles...");
+    glDrawElementsFn(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    GLenum drawErr = glGetError();
+    if (drawErr != GL_NO_ERROR) {
+        EGL_LOG(Error, "glDrawElements failed: 0x%x", drawErr);
+    }
 
     m_glBindVertexArrayOES(0);
 
     // Adjust the viewport to the whole window before rendering the overlays
-    glViewport(0, 0, drawableWidth, drawableHeight);
+    glViewportFn(0, 0, drawableWidth, drawableHeight);
     for (int i = 0; i < Overlay::OverlayMax; i++) {
         renderOverlay((Overlay::OverlayType)i, drawableWidth, drawableHeight);
     }
@@ -888,7 +1270,7 @@ void EGLRenderer::renderFrame(AVFrame* frame)
         // This glClear() requires the new back buffer to complete. This ensures
         // our eglClientWaitSync() or glFinish() call in waitToRender() will not
         // return before the new buffer is actually ready for rendering.
-        glClear(GL_COLOR_BUFFER_BIT);
+        glClearFn(GL_COLOR_BUFFER_BIT);
 
         // If we this EGL implementation supports fences, use those to delay
         // rendering the next frame until this one is completed. If not, we'll

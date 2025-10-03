@@ -237,6 +237,12 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
         return false;
     }
 
+    // PATCH: Skip VA-API initialization entirely
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "VA-API initialization skipped by patch");
+    m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
+    return false;
+
     AVHWDeviceContext* deviceContext = (AVHWDeviceContext*)m_HwContext->data;
     AVVAAPIDeviceContext* vaDeviceContext = (AVVAAPIDeviceContext*)deviceContext->hwctx;
 
