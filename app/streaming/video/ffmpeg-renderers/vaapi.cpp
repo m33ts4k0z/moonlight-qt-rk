@@ -237,7 +237,7 @@ VAAPIRenderer::initialize(PDECODER_PARAMETERS params)
         return false;
     }
 
-    // PATCH: Skip VA-API initialization entirely as this causes segfaults when using mali
+    // PATCH: Skip VA-API initialization entirely as this causes segfaults when using the mali blob
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "VA-API initialization skipped by patch");
     m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
