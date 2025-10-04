@@ -6,7 +6,7 @@ This is tested on Armbian 25.8.1 using vendor kernel 6.1.115 and specifically Gn
 
 The chip I tested this with is a RK3588 + Mali G610 (Orange pi 5 plus)
 
-Detailed guide at the [wiki](https://github.com/m33ts4k0z/moonlight-qt-rk/wiki)
+Detailed guide at the [wiki](https://github.com/m33ts4k0z/moonlight-qt-rk/wiki/Full-guide-on-how-to-install-this-fork).
 
 # Moonlight PC
 
