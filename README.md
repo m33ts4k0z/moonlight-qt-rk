@@ -1,3 +1,11 @@
+# Mali blob + rkmpp support
+
+All this fork does is to enable hardware decoder support for Rockchip chips running Mali graphics when using vendor / mali blobs instead of MESA / Panthor.
+
+This is tested on Armbian 25.8.1 using vendor kernel 6.1.115 and specifically Gnome 46.
+
+The chip I tested this with is a RK3588 + Mali G610 (Orange pi 5 plus)
+
 # Moonlight PC
 
 [Moonlight PC](https://moonlight-stream.org) is an open source PC client for NVIDIA GameStream and [Sunshine](https://github.com/LizardByte/Sunshine).
