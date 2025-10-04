@@ -374,7 +374,6 @@ int EGLRenderer::loadAndBuildShader(int shaderType,
         return 0;
     }
 
-    EGL_LOG(Info, "Successfully compiled shader \"%s\"", file);
     return shader;
 }
 
@@ -435,9 +434,7 @@ unsigned EGLRenderer::compileShader(const char* vertexShaderSrc, const char* fra
         EGL_LOG(Error, "Cannot link shader program: %s", shader_log);
         if (glDeleteProgramFn) glDeleteProgramFn(shader);
         shader = 0;
-    } else {
-        EGL_LOG(Info, "Successfully linked shader program");
-    }
+    } 
 
 progFailCreate:
     if (glDeleteShaderFn) glDeleteShaderFn(fragmentShader);
@@ -521,15 +518,6 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
         EGL_LOG(Info, "EGL doesn't support HDR rendering");
         return false;
     }
-    
-    // WORKAROUND: Mali blob driver on Wayland has a bug where SDL can't load GL function pointers
-    // Disable EGL renderer entirely and let moonlight fall back to another renderer
-    if (qgetenv("MALI_DISABLE_EGL") == "1") {
-        EGL_LOG(Warn, "EGL renderer disabled by MALI_DISABLE_EGL environment variable");
-        EGL_LOG(Warn, "This works around Mali blob + SDL + Wayland GL function loading bug");
-        m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
-        return false;
-    }
 
     // This hint will ensure we use EGL to retrieve our GL context,
     // even on X11 where that is not the default. EGL is required
@@ -543,7 +531,6 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
         m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
         return false;
     }
-    EGL_LOG(Info, "SDL_GL_LoadLibrary() succeeded");
     
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     
@@ -551,8 +538,6 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
     
-    EGL_LOG(Info, "Requesting OpenGL ES 3.0 context");
-
     int renderIndex;
     int maxRenderers = SDL_GetNumRenderDrivers();
     SDL_assert(maxRenderers >= 0);
@@ -618,8 +603,6 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
         return false;
     }
     
-    EGL_LOG(Info, "SDL_GL_CreateContext() succeeded, context = %p", m_Context);
-    
     if (SDL_GL_MakeCurrent(params->window, m_Context)) {
         EGL_LOG(Error, "Cannot use created EGL context: %s", SDL_GetError());
         EGLint eglErr = eglGetError();
@@ -633,38 +616,20 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
     // Get EGL context info
     EGLContext currentCtx = eglGetCurrentContext();
     EGLDisplay currentDpy = eglGetCurrentDisplay();
-    EGLSurface currentDraw = eglGetCurrentSurface(EGL_DRAW);
-    EGLSurface currentRead = eglGetCurrentSurface(EGL_READ);
-    
-    EGL_LOG(Info, "eglGetCurrentContext() = %p", currentCtx);
-    EGL_LOG(Info, "eglGetCurrentDisplay() = %p", currentDpy);
-    EGL_LOG(Info, "eglGetCurrentSurface(DRAW) = %p", currentDraw);
-    EGL_LOG(Info, "eglGetCurrentSurface(READ) = %p", currentRead);
     
     // Query EGL version and client APIs
     EGLint eglMajor = 0;
     eglQueryContext(currentDpy, currentCtx, EGL_CONTEXT_CLIENT_VERSION, &eglMajor);
-    const char* eglVendor = eglQueryString(currentDpy, EGL_VENDOR);
-    const char* eglVersion = eglQueryString(currentDpy, EGL_VERSION);
-    const char* eglAPIs = eglQueryString(currentDpy, EGL_CLIENT_APIS);
     
-    EGL_LOG(Info, "EGL Vendor: %s", eglVendor ? eglVendor : "NULL");
-    EGL_LOG(Info, "EGL Version: %s", eglVersion ? eglVersion : "NULL");
-    EGL_LOG(Info, "EGL Client APIs: %s", eglAPIs ? eglAPIs : "NULL");
-    EGL_LOG(Info, "EGL Context Client Version: %d", eglMajor);
     
     // Try to get the EGL config
     EGLint configId = 0;
     eglQueryContext(currentDpy, currentCtx, EGL_CONFIG_ID, &configId);
-    EGL_LOG(Info, "EGL Config ID: %d", configId);
     
     // Now try GL functions
     const char* glVersion = (const char*)glGetString(GL_VERSION);
     const char* glVendor = (const char*)glGetString(GL_VENDOR);
     const char* glRenderer = (const char*)glGetString(GL_RENDERER);
-    GLenum glErr = glGetError();
-    
-    EGL_LOG(Info, "After glGetString() calls, glGetError() = 0x%x", glErr);
     
     if (!glVersion || !glVendor || !glRenderer) {
         EGL_LOG(Warn, "SDL's GL function pointers are NULL - trying SDL_GL_GetProcAddress workaround");
@@ -690,15 +655,7 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
             m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
             return false;
         }
-        
-        EGL_LOG(Info, "SDL_GL_GetProcAddress workaround succeeded!");
-        EGL_LOG(Info, "GL functions are accessible via SDL_GL_GetProcAddress");
-    }
-    
-    EGL_LOG(Info, "GL context is valid and functional");
-    EGL_LOG(Info, "GL Vendor: %s", glVendor);
-    EGL_LOG(Info, "GL Renderer: %s", glRenderer);
-    EGL_LOG(Info, "GL Version: %s", glVersion);
+    }    
 
     {
         int r, g, b, a;
@@ -979,8 +936,6 @@ bool EGLRenderer::specialize() {
         return false;
     }
     
-    EGL_LOG(Info, "Context successfully made current in specialize()");
-    
     // Clear any GL errors that may have occurred during texture/buffer setup
     GLenum err;
     while ((err = glGetError()) != GL_NO_ERROR) {
@@ -1159,12 +1114,8 @@ void EGLRenderer::renderFrame(AVFrame* frame)
         EGL_LOG(Error, "Failed to get glActiveTexture or glBindTexture function pointers");
         return;
     }
-    
-    EGL_LOG(Info, "exportEGLImages returned %d planes", (int)plane_count);
     for (ssize_t i = 0; i < plane_count; ++i) {
         glActiveTextureFn(GL_TEXTURE0 + i);
-        EGL_LOG(Info, "Binding texture %d (GL_TEXTURE%d) to EGLImage %p", 
-                (int)i, (int)i, imgs[i]);
         glBindTextureFn(GL_TEXTURE_EXTERNAL_OES, m_Textures[i]);
         m_glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, imgs[i]);
         GLenum err = glGetError();
@@ -1227,29 +1178,23 @@ void EGLRenderer::renderFrame(AVFrame* frame)
             glUniform3fvFn(m_ShaderProgramParams[NV12_PARAM_OFFSET], 1, getColorOffsets(frame));
             glUniform1iFn(m_ShaderProgramParams[NV12_PARAM_PLANE1], 0);
             glUniform1iFn(m_ShaderProgramParams[NV12_PARAM_PLANE2], 1);
-            EGL_LOG(Info, "Set NV12 shader uniforms");
         } else {
             EGL_LOG(Error, "Failed to get NV12 uniform function pointers");
             return;
         }
     }
     else if (m_EGLImagePixelFormat == AV_PIX_FMT_DRM_PRIME) {
-        EGL_LOG(Info, "Setting DRM_PRIME shader uniform: uTexture location=%d, value=0", 
-                m_ShaderProgramParams[OPAQUE_PARAM_TEXTURE]);
         glUniform1iFn(m_ShaderProgramParams[OPAQUE_PARAM_TEXTURE], 0);
         GLenum err = glGetError();
         if (err != GL_NO_ERROR) {
             EGL_LOG(Error, "glUniform1i failed: 0x%x", err);
-        } else {
-            EGL_LOG(Info, "glUniform1i succeeded");
-        }
+        } 
     }
     else {
         EGL_LOG(Error, "Unknown pixel format %d (AV_PIX_FMT_DRM_PRIME=%d, AV_PIX_FMT_NV12=%d)", 
                 m_EGLImagePixelFormat, AV_PIX_FMT_DRM_PRIME, AV_PIX_FMT_NV12);
     }
 
-    EGL_LOG(Info, "Drawing triangles...");
     glDrawElementsFn(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     GLenum drawErr = glGetError();
     if (drawErr != GL_NO_ERROR) {
