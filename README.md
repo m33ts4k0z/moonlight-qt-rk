@@ -16,7 +16,7 @@ Moonlight also has mobile versions for [Android](https://github.com/moonlight-st
 
 You can follow development on our [Discord server](https://moonlight-stream.org/discord) and help translate Moonlight into your language on [Weblate](https://hosted.weblate.org/projects/moonlight/moonlight-qt/).
 
- [![AppVeyor Build Status](https://ci.appveyor.com/api/projects/status/glj5cxqwy2w3bglv/branch/master?svg=true)](https://ci.appveyor.com/project/cgutman/moonlight-qt/branch/master)
+ [![Build](https://img.shields.io/github/actions/workflow/status/moonlight-stream/moonlight-qt/build.yml?branch=master)](https://github.com/moonlight-stream/moonlight-qt/actions/workflows/build.yml?query=branch%3Amaster)
  [![Downloads](https://img.shields.io/github/downloads/moonlight-stream/moonlight-qt/total)](https://github.com/moonlight-stream/moonlight-qt/releases)
  [![Translation Status](https://hosted.weblate.org/widgets/moonlight/-/moonlight-qt/svg-badge.svg)](https://hosted.weblate.org/projects/moonlight/moonlight-qt/)
 
@@ -41,6 +41,9 @@ You can follow development on our [Discord server](https://moonlight-stream.org/
 - [Experimental RISC-V Debian packages](https://github.com/moonlight-stream/moonlight-docs/wiki/Installing-Moonlight-Qt-on-RISC%E2%80%90V-Single-Board-Computers)
 - [NVIDIA Jetson and Nintendo Switch (Ubuntu L4T)](https://github.com/moonlight-stream/moonlight-docs/wiki/Installing-Moonlight-Qt-on-Linux4Tegra-(L4T)-Ubuntu)
 
+### Nightly Builds
+- [Downloads](https://nightly.link/moonlight-stream/moonlight-qt/workflows/build/master)
+
 #### Special Thanks
 
 [![Hosted By: Cloudsmith](https://img.shields.io/badge/OSS%20hosting%20by-cloudsmith-blue?logo=cloudsmith&style=flat-square)](https://cloudsmith.com)
@@ -64,7 +67,7 @@ Hosting for Moonlight's Debian and L4T package repositories is graciously provid
 * [create-dmg](https://github.com/sindresorhus/create-dmg) (only if building DMGs for use on non-development Macs)
 
 ### Linux/Unix Build Requirements
-* Qt 6 is recommended, but Qt 5.9 or later is also supported (replace `qmake6` with `qmake` when using Qt 5).
+* Qt 6 is recommended, but Qt 5.12 or later is also supported (replace `qmake6` with `qmake` when using Qt 5).
 * GCC or Clang
 * FFmpeg 4.0 or later
 * Install the required packages:
@@ -82,10 +85,17 @@ Hosting for Moonlight's Debian and L4T package repositories is graciously provid
 * [Steam Link SDK](https://github.com/ValveSoftware/steamlink-sdk) cloned on your build system
 * STEAMLINK_SDK_PATH environment variable set to the Steam Link SDK path
 
+**Steam Link Hardware Limitations**  
+Moonlight builds for Steam Link are subject to hardware limitations of the Steam Link device:
+* Maximum resolution: **1080p (1920x1080)**
+* Maximum framerate: **60 FPS**
+* Maximum video bitrate: **40 Mbps**
+* **HDR streaming is not supported** on the original hardware
+
 ### Build Setup Steps
 1. Install the latest Qt SDK (and optionally, the Qt Creator IDE) from https://www.qt.io/download
     * You can install Qt via Homebrew on macOS, but you will need to use `brew install qt --with-debug` to be able to create debug builds of Moonlight.
-    * You may also use your Linux distro's package manager for the Qt SDK as long as the packages are Qt 5.9 or later.
+    * You may also use your Linux distro's package manager for the Qt SDK as long as the packages are Qt 5.12 or later.
     * This step is not required for building on Steam Link, because the Steam Link SDK includes Qt 5.14.
 2. Run `git submodule update --init --recursive` from within `moonlight-qt/`
 3. Open the project in Qt Creator or build from qmake on the command line.
