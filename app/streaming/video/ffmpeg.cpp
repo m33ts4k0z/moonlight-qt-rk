@@ -18,26 +18,13 @@ static inline uint64_t getMicroseconds() {
 }
 
 // Compatibility layer for DECODE_UNIT timing fields
-// Windows version uses enqueueTimeUs/receiveTimeUs (microseconds)
-// Newer versions use enqueueTimeMs/receiveTimeMs (milliseconds)
+// The structure always uses enqueueTimeUs/receiveTimeUs (microseconds)
 static inline uint64_t getEnqueueTimeUs(const DECODE_UNIT& du) {
-#ifdef Q_OS_WIN32
-    // Windows version has enqueueTimeUs in microseconds
     return du.enqueueTimeUs;
-#else
-    // Newer versions have enqueueTimeMs in milliseconds, convert to microseconds
-    return (uint64_t)du.enqueueTimeMs * 1000;
-#endif
 }
 
 static inline uint64_t getReceiveTimeUs(const DECODE_UNIT& du) {
-#ifdef Q_OS_WIN32
-    // Windows version has receiveTimeUs in microseconds
     return du.receiveTimeUs;
-#else
-    // Newer versions have receiveTimeMs in milliseconds, convert to microseconds
-    return (uint64_t)du.receiveTimeMs * 1000;
-#endif
 }
 
 #include "ffmpeg-renderers/sdlvid.h"
@@ -2120,11 +2107,7 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
     // Store the decode start time in the frame's timing field temporarily
     // We'll use this to calculate actual decode time, not queue wait time
     DECODE_UNIT duWithDecodeTime = *du;
-#ifdef Q_OS_WIN32
     duWithDecodeTime.enqueueTimeUs = decodeStartTimeUs;
-#else
-    duWithDecodeTime.enqueueTimeMs = decodeStartTimeUs / 1000;
-#endif
     m_FrameInfoQueue.enqueue(duWithDecodeTime);
 
     m_FramesIn++;
