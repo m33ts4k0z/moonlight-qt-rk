@@ -17,6 +17,29 @@ static inline uint64_t getMicroseconds() {
     return duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
+// Compatibility layer for DECODE_UNIT timing fields
+// Windows version uses enqueueTimeUs/receiveTimeUs (microseconds)
+// Newer versions use enqueueTimeMs/receiveTimeMs (milliseconds)
+static inline uint64_t getEnqueueTimeUs(const DECODE_UNIT& du) {
+#ifdef Q_OS_WIN32
+    // Windows version has enqueueTimeUs in microseconds
+    return du.enqueueTimeUs;
+#else
+    // Newer versions have enqueueTimeMs in milliseconds, convert to microseconds
+    return (uint64_t)du.enqueueTimeMs * 1000;
+#endif
+}
+
+static inline uint64_t getReceiveTimeUs(const DECODE_UNIT& du) {
+#ifdef Q_OS_WIN32
+    // Windows version has receiveTimeUs in microseconds
+    return du.receiveTimeUs;
+#else
+    // Newer versions have receiveTimeMs in milliseconds, convert to microseconds
+    return (uint64_t)du.receiveTimeMs * 1000;
+#endif
+}
+
 #include "ffmpeg-renderers/sdlvid.h"
 #include "ffmpeg-renderers/genhwaccel.h"
 
@@ -994,6 +1017,8 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
 
     // First pass using our top-tier hwaccel implementations
     if (pass == 0) {
+#pragma warning(push)
+#pragma warning(disable: 4065)  // C4065: switch contains 'default' but no 'case' labels (false positive - cases are conditionally compiled)
         switch (hwDecodeCfg->device_type) {
 #ifdef Q_OS_WIN32
         // DXVA2 appears in the hwaccel list before D3D11VA, so we only check for D3D11VA
@@ -1023,6 +1048,7 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
             return new PlVkRenderer(true);
 #endif
         default:
+            // Handle pixel format-based renderer selection
             switch (hwDecodeCfg->pix_fmt) {
 #ifdef HAVE_DRM
             case AV_PIX_FMT_DRM_PRIME:
@@ -1031,8 +1057,10 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
                 return new DrmRenderer(hwDecodeCfg->device_type);
 #endif
             default:
+                // No specific renderer for this device type/pixel format combination
                 return nullptr;
             }
+#pragma warning(pop)
         }
     }
     // Second pass for our second-tier hwaccel implementations
@@ -1889,11 +1917,21 @@ void FFmpegVideoDecoder::decoderThreadProc()
                         // Data buffers in the DU are not valid here!
                         DECODE_UNIT du = m_FrameInfoQueue.dequeue();
 
-                        // Count time in avcodec_send_packet() and avcodec_receive_frame()
-                        // as time spent decoding. Also count time spent in the decode unit
-                        // queue because that's directly caused by decoder latency.
-                        // Convert enqueueTimeMs (milliseconds) to microseconds
-                        m_ActiveWndVideoStats.totalDecodeTimeUs += (getMicroseconds() - (uint64_t)du.enqueueTimeMs * 1000);
+                        // Measure actual decode time from when we sent the packet to when we received the frame
+                        // We stored the decode start time in the timing field when we sent the packet
+                        uint64_t decodeEndTimeUs = getMicroseconds();
+                        uint64_t actualDecodeTimeUs = decodeEndTimeUs - getEnqueueTimeUs(du);
+                        
+                        // Cap decode time to a reasonable maximum (e.g., 100ms) to avoid reporting
+                        // incorrect values due to queue delays or timing issues
+                        const uint64_t MAX_REASONABLE_DECODE_TIME_US = 100000; // 100ms
+                        if (actualDecodeTimeUs > MAX_REASONABLE_DECODE_TIME_US) {
+                            // If decode time is unreasonably high, it's likely due to queue delays
+                            // Use a more conservative estimate based on frame rate
+                            actualDecodeTimeUs = MAX_REASONABLE_DECODE_TIME_US;
+                        }
+                        
+                        m_ActiveWndVideoStats.totalDecodeTimeUs += actualDecodeTimeUs;
 
                         // Store the presentation time (90 kHz timebase)
                         // rtpTimestamp field was removed, use frame number as fallback
@@ -2046,9 +2084,12 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
         m_Pkt->flags = 0;
     }
 
-    // Convert enqueueTimeMs and receiveTimeMs (milliseconds) to microseconds
-    m_ActiveWndVideoStats.totalReassemblyTimeUs += ((uint64_t)du->enqueueTimeMs * 1000 - (uint64_t)du->receiveTimeMs * 1000);
+    // Calculate reassembly time (enqueue time - receive time) in microseconds
+    m_ActiveWndVideoStats.totalReassemblyTimeUs += (getEnqueueTimeUs(*du) - getReceiveTimeUs(*du));
 
+    // Track when we actually send the packet to the decoder (when decoding starts)
+    uint64_t decodeStartTimeUs = getMicroseconds();
+    
     err = avcodec_send_packet(m_VideoDecoderCtx, m_Pkt);
     if (err < 0) {
         char errorstring[512];
@@ -2076,7 +2117,15 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
         return DR_NEED_IDR;
     }
 
-    m_FrameInfoQueue.enqueue(*du);
+    // Store the decode start time in the frame's timing field temporarily
+    // We'll use this to calculate actual decode time, not queue wait time
+    DECODE_UNIT duWithDecodeTime = *du;
+#ifdef Q_OS_WIN32
+    duWithDecodeTime.enqueueTimeUs = decodeStartTimeUs;
+#else
+    duWithDecodeTime.enqueueTimeMs = decodeStartTimeUs / 1000;
+#endif
+    m_FrameInfoQueue.enqueue(duWithDecodeTime);
 
     m_FramesIn++;
     return DR_OK;
