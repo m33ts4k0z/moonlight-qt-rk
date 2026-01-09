@@ -10,6 +10,7 @@ extern "C" {
 }
 
 #include <wrl/client.h>
+#include <wrl/wrappers/corewrappers.h>
 
 class D3D11VARenderer : public IFFmpegRenderer
 {
@@ -21,15 +22,13 @@ public:
     virtual bool prepareDecoderContextInGetFormat(AVCodecContext* context, AVPixelFormat pixelFormat) override;
     virtual void renderFrame(AVFrame* frame) override;
     virtual void notifyOverlayUpdated(Overlay::OverlayType) override;
+    virtual void waitToRender() override;
     virtual int getRendererAttributes() override;
     virtual int getDecoderCapabilities() override;
-    virtual bool needsTestFrame() override;
     virtual InitFailureReason getInitFailureReason() override;
 
     enum PixelShaders {
         GENERIC_YUV_420,
-        BT_601_LIMITED_YUV_420,
-        BT_2020_LIMITED_YUV_420,
         GENERIC_AYUV,
         GENERIC_Y410,
         _COUNT
@@ -62,20 +61,25 @@ private:
     Microsoft::WRL::ComPtr<IDXGIFactory5> m_Factory;
     Microsoft::WRL::ComPtr<ID3D11Device> m_Device;
     Microsoft::WRL::ComPtr<IDXGISwapChain4> m_SwapChain;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_DeviceContext;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext1> m_DeviceContext;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_RenderTargetView;
+    Microsoft::WRL::ComPtr<ID3D11BlendState> m_VideoBlendState;
+    Microsoft::WRL::ComPtr<ID3D11BlendState> m_OverlayBlendState;
+
     SupportedFenceType m_FenceType;
+    Microsoft::WRL::ComPtr<ID3D11Fence> m_Fence;
+    Microsoft::WRL::Wrappers::Event m_FenceEvent;
+    UINT64 m_NextFenceValue;
     SDL_mutex* m_ContextLock;
     bool m_BindDecoderOutputTextures;
-    bool m_UseFenceHack;
 
     DECODER_PARAMETERS m_DecoderParams;
     int m_TextureAlignment;
     DXGI_FORMAT m_TextureFormat;
+    UINT m_TextureWidth;
+    UINT m_TextureHeight;
     int m_DisplayWidth;
     int m_DisplayHeight;
-    int m_LastColorSpace;
-    bool m_LastFullRange;
     AVColorTransferCharacteristic m_LastColorTrc;
 
     bool m_AllowTearing;

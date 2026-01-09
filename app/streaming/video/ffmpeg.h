@@ -4,6 +4,7 @@
 #include <QQueue>
 #include <set>
 
+#include "../bandwidth.h"
 #include "decoder.h"
 #include "ffmpeg-renderers/renderer.h"
 #include "ffmpeg-renderers/pacer/pacer.h"
@@ -78,6 +79,8 @@ private:
 
     bool initializeRendererInternal(IFFmpegRenderer* renderer, PDECODER_PARAMETERS params);
 
+    static bool isSeparateTestDecoderRequired(const AVCodec* decoder);
+
     void reset();
 
     void writeBuffer(PLENTRY entry, int& offset);
@@ -99,6 +102,7 @@ private:
     IFFmpegRenderer* m_FrontendRenderer;
     int m_ConsecutiveFailedDecodes;
     Pacer* m_Pacer;
+    BandwidthTracker m_BwTracker;
     VIDEO_STATS m_ActiveWndVideoStats;
     VIDEO_STATS m_LastWndVideoStats;
     VIDEO_STATS m_GlobalVideoStats;
