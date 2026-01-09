@@ -203,8 +203,8 @@ jobs:
           chmod +x linuxdeploy
 
           # Qt plugin
-          wget -O linuxdeploy-plugin-qt.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
-          chmod +x linuxdeploy-plugin-qt.AppImage
+          wget -O linuxdeploy-qt-plugin https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
+          chmod +x linuxdeploy-qt-plugin
 
       - name: Build Binaries
         run: |
