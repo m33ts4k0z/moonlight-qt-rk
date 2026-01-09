@@ -125,7 +125,11 @@ jobs:
         run: |
           ./autogen.sh
           if [ "${{ matrix.arch }}" = "arm64" ]; then
-            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu --enable-x11
+            # Disable X11 and DRM backends for ARM64 cross-compilation since those libraries aren't available
+            # The core libva library will still be built
+            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu \
+              --disable-x11 \
+              --disable-drm
             make -j$(nproc)
             sudo make install
           else
