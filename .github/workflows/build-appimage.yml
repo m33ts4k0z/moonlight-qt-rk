@@ -75,6 +75,9 @@ jobs:
               --disable-video-gbm
             make -j$(nproc)
             sudo make install
+            # Verify SDL2 was installed correctly
+            ls -la /usr/aarch64-linux-gnu/bin/sdl2-config || echo "Warning: sdl2-config not found"
+            ls -la /usr/aarch64-linux-gnu/lib/pkgconfig/sdl2.pc || echo "Warning: sdl2.pc not found"
           else
             ./configure
             make -j$(nproc)
@@ -94,6 +97,13 @@ jobs:
         run: |
           ./autogen.sh
           if [ "${{ matrix.arch }}" = "arm64" ]; then
+            # Set paths to find the cross-compiled SDL2
+            export PKG_CONFIG_PATH=/usr/aarch64-linux-gnu/lib/pkgconfig:$PKG_CONFIG_PATH
+            export PKG_CONFIG_LIBDIR=/usr/aarch64-linux-gnu/lib/pkgconfig
+            # SDL_ttf configure looks for sdl2-config
+            if [ -f /usr/aarch64-linux-gnu/bin/sdl2-config ]; then
+              export SDL2_CONFIG=/usr/aarch64-linux-gnu/bin/sdl2-config
+            fi
             ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu
             make -j$(nproc)
             sudo make install
