@@ -45,8 +45,12 @@ jobs:
               libc6-dev-arm64-cross qemu-user-static binfmt-support
             # Enable multiarch and install ARM64 development packages for cross-compilation
             sudo dpkg --add-architecture arm64
-            sudo apt update
+            # Configure apt to ignore security repository errors for ARM64 (security.ubuntu.com doesn't have ARM64)
+            sudo sed -i 's|^deb.*security\.ubuntu\.com.*jammy.*main|# &|' /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+            # Update package lists (ignore errors from security repo)
+            sudo apt update 2>&1 | grep -v "Failed to fetch.*security.ubuntu.com" || true
             # Install ARM64 versions of libraries needed for libva and other dependencies
+            # These should be available from the main Ubuntu repositories
             sudo apt install -y \
               libdrm-dev:arm64 \
               libx11-dev:arm64 \
