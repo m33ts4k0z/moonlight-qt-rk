@@ -19,7 +19,7 @@ else
 fi
 
 command -v qmake6 >/dev/null 2>&1 || fail "Unable to find 'qmake6' in your PATH!"
-#command -v linuxdeployqt >/dev/null 2>&1 || fail "Unable to find 'linuxdeployqt' in your PATH!"
+command -v linuxdeployqt >/dev/null 2>&1 || fail "Unable to find 'linuxdeployqt' in your PATH!"
 
 echo Cleaning output directories
 rm -rf $BUILD_FOLDER
@@ -54,7 +54,7 @@ popd
 
 echo Creating AppImage
 pushd $INSTALLER_FOLDER
-export VERSION=$VERSION; export QML_SOURCES_PATHS="$SOURCE_ROOT/app/gui"; linuxdeploy --appdir "$DEPLOY_FOLDER" --plugin qt --output appimage --verbosity=3 2>&1 | tee /tmp/linuxdeploy.log
+VERSION=$VERSION linuxdeployqt $DEPLOY_FOLDER/usr/share/applications/com.moonlight_stream.Moonlight.desktop -qmake=qmake6 -qmldir=$SOURCE_ROOT/app/gui -appimage -extra-plugins=tls || fail "linuxdeployqt failed!"
 popd
 
 echo Build successful
