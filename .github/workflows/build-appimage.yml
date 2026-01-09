@@ -51,6 +51,7 @@ jobs:
             sudo apt update 2>&1 | grep -v "Failed to fetch.*security.ubuntu.com" || true
             # Install ARM64 versions of libraries needed for libva and other dependencies
             # These should be available from the main Ubuntu repositories
+            echo "Installing ARM64 development packages..."
             sudo apt install -y \
               libdrm-dev:arm64 \
               libx11-dev:arm64 \
@@ -61,7 +62,10 @@ jobs:
               libxcb-dev:arm64 \
               libgbm-dev:arm64 \
               libpulse-dev:arm64 \
-              libpipewire-0.3-dev:arm64 2>&1 | grep -E "(Setting up|Unpacking|Unable to locate)" || true
+              libpipewire-0.3-dev:arm64 || echo "Some packages may not be available"
+            # Verify critical packages were installed
+            echo "Verifying package installation:"
+            dpkg -l | grep -E "libdrm-dev|libx11-dev" | grep arm64 || echo "Warning: Some ARM64 packages may not be installed"
           fi
           sudo pip3 install meson
           mkdir -p dep_root/{bin,include,lib}
@@ -141,26 +145,24 @@ jobs:
         run: |
           ./autogen.sh
           if [ "${{ matrix.arch }}" = "arm64" ]; then
-            # Set PKG_CONFIG_PATH to find ARM64 libraries
+            # Set PKG_CONFIG_PATH for cross-compilation pkg-config
             # ARM64 packages install pkg-config files to /usr/lib/aarch64-linux-gnu/pkgconfig
             export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
             export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+            # Also set for the cross-compilation pkg-config
+            export PKG_CONFIG=/usr/bin/aarch64-linux-gnu-pkg-config
             # Verify packages are installed and findable
             echo "Checking for ARM64 packages:"
             ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/libdrm.pc 2>/dev/null || echo "libdrm.pc not found"
             ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/x11.pc 2>/dev/null || echo "x11.pc not found"
-            pkg-config --exists libdrm && echo "libdrm found via pkg-config" || echo "libdrm not found via pkg-config"
-            # If libdrm is not found, disable DRM backend
-            if ! pkg-config --exists libdrm; then
-              echo "libdrm not available, building without DRM backend"
-              ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu \
-                --enable-x11 \
-                --disable-drm
-            else
-              ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu \
-                --enable-x11 \
-                --enable-drm
-            fi
+            aarch64-linux-gnu-pkg-config --exists libdrm && echo "libdrm found via cross pkg-config" || echo "libdrm not found via cross pkg-config"
+            # Try to configure with DRM, fall back to X11 only if DRM fails
+            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu \
+              --enable-x11 \
+              --enable-drm || \
+            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu \
+              --enable-x11 \
+              --disable-drm
             make -j$(nproc)
             sudo make install
           else
