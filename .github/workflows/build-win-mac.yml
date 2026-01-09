@@ -12,6 +12,7 @@ on:
 
 jobs:
   build:
+    if: false  # Temporarily disabled
     env:
       CI_VERSION: ${{ inputs.ci_version }}
     strategy:

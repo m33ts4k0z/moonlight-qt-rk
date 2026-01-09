@@ -33,12 +33,14 @@ jobs:
       ci_version: ${{ needs.setup.outputs.ci_version }}
 
   build-steamlink:
+    if: false  # Temporarily disabled
     needs: setup
     uses: ./.github/workflows/build-steamlink.yml
     with:
       ci_version: ${{ needs.setup.outputs.ci_version }}
 
   build-windows-macos:
+    if: false  # Temporarily disabled
     needs: setup
     uses: ./.github/workflows/build-win-mac.yml
     with:

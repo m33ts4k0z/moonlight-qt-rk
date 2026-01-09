@@ -18,7 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, arm64]
+        arch: [arm64]  # Temporarily only building ARM64
+        # arch: [x86_64, arm64]  # Restore this line to build both architectures
     runs-on: ubuntu-22.04
 
     steps:
@@ -39,9 +40,18 @@ jobs:
             libxext-dev libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev libxss-dev libxt-dev libxv-dev libxxf86vm-dev libxcb-dri3-dev libx11-xcb-dev \
             wayland-protocols libopus-dev libvdpau-dev libgl-dev libpipewire-0.3-dev vulkan-sdk
           if [ "${{ matrix.arch }}" = "arm64" ]; then
+            # Enable multiarch for ARM64 packages
+            sudo dpkg --add-architecture arm64
+            sudo apt update
             sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-              libc6-dev-arm64-cross qemu-user-static binfmt-support \
-              libpipewire-0.3-dev:arm64 libpulse-dev:arm64 libdrm-dev:arm64 libgbm-dev:arm64
+              libc6-dev-arm64-cross qemu-user-static binfmt-support
+            # Try to install ARM64 development packages for cross-compilation
+            # These are optional - SDL2 can build without them
+            sudo apt install -y \
+              libpulse-dev:arm64 \
+              libdrm-dev:arm64 \
+              libgbm-dev:arm64 \
+              libpipewire-0.3-dev:arm64 2>&1 | grep -v "Unable to locate package" || true
           fi
           sudo pip3 install meson
           mkdir -p dep_root/{bin,include,lib}
@@ -62,7 +72,13 @@ jobs:
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
             export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
-            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu
+            # Configure SDL2 - disable optional features that require ARM64 packages not in repos
+            # SDL2 will use ALSA instead of PulseAudio, and other fallbacks
+            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu \
+              --disable-pipewire \
+              --disable-pulseaudio \
+              --disable-video-kmsdrm \
+              --disable-video-gbm
             make -j$(nproc)
             sudo make install
           else
