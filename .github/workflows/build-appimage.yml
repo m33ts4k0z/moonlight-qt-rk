@@ -41,11 +41,23 @@ jobs:
             wayland-protocols libopus-dev libvdpau-dev libgl-dev libpipewire-0.3-dev vulkan-sdk
           if [ "${{ matrix.arch }}" = "arm64" ]; then
             # Install cross-compilation tools
-            # Note: We don't enable multiarch or install ARM64 packages because Ubuntu's repos
-            # don't have ARM64 packages for Jammy. SDL2 will be configured to disable
-            # features that require those packages (pipewire, pulseaudio, KMSDRM, GBM).
             sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
               libc6-dev-arm64-cross qemu-user-static binfmt-support
+            # Enable multiarch and install ARM64 development packages for cross-compilation
+            sudo dpkg --add-architecture arm64
+            sudo apt update
+            # Install ARM64 versions of libraries needed for libva and other dependencies
+            sudo apt install -y \
+              libdrm-dev:arm64 \
+              libx11-dev:arm64 \
+              libxext-dev:arm64 \
+              libxfixes-dev:arm64 \
+              libx11-xcb-dev:arm64 \
+              libxcb-dri3-dev:arm64 \
+              libxcb-dev:arm64 \
+              libgbm-dev:arm64 \
+              libpulse-dev:arm64 \
+              libpipewire-0.3-dev:arm64 2>&1 | grep -E "(Setting up|Unpacking|Unable to locate)" || true
           fi
           sudo pip3 install meson
           mkdir -p dep_root/{bin,include,lib}
@@ -125,11 +137,15 @@ jobs:
         run: |
           ./autogen.sh
           if [ "${{ matrix.arch }}" = "arm64" ]; then
-            # Disable X11 and DRM backends for ARM64 cross-compilation since those libraries aren't available
-            # The core libva library will still be built
+            # Set PKG_CONFIG_PATH to find ARM64 libraries
+            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH
+            export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig
+            # Enable X11 backend (DRM is optional and may not be available)
             ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu \
-              --disable-x11 \
-              --disable-drm
+              --enable-x11 \
+              --disable-drm || \
+            ./configure --host=aarch64-linux-gnu --prefix=/usr/aarch64-linux-gnu \
+              --enable-x11
             make -j$(nproc)
             sudo make install
           else
