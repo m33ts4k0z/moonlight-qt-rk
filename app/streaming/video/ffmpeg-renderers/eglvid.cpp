@@ -168,10 +168,7 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
     typedef void (*PFNGLBINDBUFFERPROC)(GLenum target, GLuint buffer);
     typedef void (*PFNGLBUFFERDATAPROC)(GLenum target, GLsizeiptr size, const void *data, GLenum usage);
     typedef void (*PFNGLUSEPROGRAMPROC)(GLuint program);
-    typedef void (*PFNGLVERTEXATTRIBPOINTERPROC)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
-    typedef void (*PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
     typedef void (*PFNGLACTIVETEXTUREPROC)(GLenum texture);
-    typedef void (*PFNGLUNIFORM1IPROC)(GLint location, GLint v0);
     typedef void (*PFNGLDRAWARRAYSPROC)(GLenum mode, GLint first, GLsizei count);
 
     PFNGLBINDTEXTUREPROC glBindTextureFn = (PFNGLBINDTEXTUREPROC)SDL_GL_GetProcAddress("glBindTexture");
@@ -180,10 +177,7 @@ void EGLRenderer::renderOverlay(Overlay::OverlayType type, int viewportWidth, in
     PFNGLBINDBUFFERPROC glBindBufferFn = (PFNGLBINDBUFFERPROC)SDL_GL_GetProcAddress("glBindBuffer");
     PFNGLBUFFERDATAPROC glBufferDataFn = (PFNGLBUFFERDATAPROC)SDL_GL_GetProcAddress("glBufferData");
     PFNGLUSEPROGRAMPROC glUseProgramFn = (PFNGLUSEPROGRAMPROC)SDL_GL_GetProcAddress("glUseProgram");
-    PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointerFn = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
-    PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArrayFn = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
     PFNGLACTIVETEXTUREPROC glActiveTextureFn = (PFNGLACTIVETEXTUREPROC)SDL_GL_GetProcAddress("glActiveTexture");
-    PFNGLUNIFORM1IPROC glUniform1iFn = (PFNGLUNIFORM1IPROC)SDL_GL_GetProcAddress("glUniform1i");
     PFNGLDRAWARRAYSPROC glDrawArraysFn = (PFNGLDRAWARRAYSPROC)SDL_GL_GetProcAddress("glDrawArrays");
 
     // Do nothing if this overlay is disabled
@@ -519,7 +513,67 @@ bool EGLRenderer::compileShaders() {
         glUseProgramFn(0);
     }
 
-    return true;
+    // Setup the VAO and VBO for video rendering
+    // This is critical for Mali blob driver - must be done after shader compilation
+    static const VERTEX vertices[] = {
+        // pos .... // tex coords
+        { 1.0f, 1.0f, 1.0f, 0.0f },
+        { -1.0f, 1.0f, 0.0f, 0.0f },
+        { -1.0f, -1.0f, 0.0f, 1.0f },
+        { -1.0f, -1.0f, 0.0f, 1.0f },
+        { 1.0f, -1.0f, 1.0f, 1.0f },
+        { 1.0f, 1.0f, 1.0f, 0.0f },
+    };
+
+    // Mali blob workaround: Get GL buffer/vertex functions
+    typedef void (*PFNGLGENBUFFERSPROC)(GLsizei n, GLuint *buffers);
+    typedef void (*PFNGLBINDBUFFERPROC)(GLenum target, GLuint buffer);
+    typedef void (*PFNGLBUFFERDATAPROC)(GLenum target, GLsizeiptr size, const void *data, GLenum usage);
+    typedef void (*PFNGLVERTEXATTRIBPOINTERPROC)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
+    typedef void (*PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
+    typedef void (*PFNGLDELETEBUFFERSPROC)(GLsizei n, const GLuint *buffers);
+    
+    PFNGLGENBUFFERSPROC glGenBuffersFn = (PFNGLGENBUFFERSPROC)SDL_GL_GetProcAddress("glGenBuffers");
+    PFNGLBINDBUFFERPROC glBindBufferFn = (PFNGLBINDBUFFERPROC)SDL_GL_GetProcAddress("glBindBuffer");
+    PFNGLBUFFERDATAPROC glBufferDataFn = (PFNGLBUFFERDATAPROC)SDL_GL_GetProcAddress("glBufferData");
+    PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointerFn = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
+    PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArrayFn = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
+    PFNGLDELETEBUFFERSPROC glDeleteBuffersFn = (PFNGLDELETEBUFFERSPROC)SDL_GL_GetProcAddress("glDeleteBuffers");
+    
+    if (!glGenBuffersFn || !glBindBufferFn || !glBufferDataFn || 
+        !glVertexAttribPointerFn || !glEnableVertexAttribArrayFn || !glDeleteBuffersFn) {
+        EGL_LOG(Error, "Failed to get GL buffer/vertex function pointers in compileShaders()");
+        return false;
+    }
+    
+    // Setup the VAO and VBO
+    unsigned int VBO;
+    m_glGenVertexArraysOES(1, &m_VideoVAO);
+    glGenBuffersFn(1, &VBO);
+
+    m_glBindVertexArrayOES(m_VideoVAO);
+
+    glBindBufferFn(GL_ARRAY_BUFFER, VBO);
+    glBufferDataFn(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    // compileShader() ensures that aPosition and aTexCoord are indexes 0 and 1 respectively
+    glVertexAttribPointerFn(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)offsetof(VERTEX, x));
+    glEnableVertexAttribArrayFn(0);
+    glVertexAttribPointerFn(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)offsetof(VERTEX, u));
+    glEnableVertexAttribArrayFn(1);
+
+    glBindBufferFn(GL_ARRAY_BUFFER, 0);
+    m_glBindVertexArrayOES(0);
+
+    glDeleteBuffersFn(1, &VBO);
+
+    PFNGLGETERRORPROC glGetErrorFn = (PFNGLGETERRORPROC)SDL_GL_GetProcAddress("glGetError");
+    GLenum err = glGetErrorFn ? glGetErrorFn() : GL_NO_ERROR;
+    if (err != GL_NO_ERROR) {
+        EGL_LOG(Error, "OpenGL error: %d", err);
+    }
+
+    return err == GL_NO_ERROR;
 }
 
 bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
@@ -949,197 +1003,6 @@ bool EGLRenderer::setupOverlayRenderingState() {
     return err == GL_NO_ERROR;
 }
 
-const float *EGLRenderer::getColorOffsets(const AVFrame* frame) {
-    static const float limitedOffsets[] = { 16.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f };
-    static const float fullOffsets[] = { 0.0f, 128.0f / 255.0f, 128.0f / 255.0f };
-
-    return isFrameFullRange(frame) ? fullOffsets : limitedOffsets;
-}
-
-const float *EGLRenderer::getColorMatrix(const AVFrame* frame) {
-    /* The conversion matrices are shamelessly stolen from linux:
-     * drivers/media/platform/imx-pxp.c:pxp_setup_csc
-     */
-    static const float bt601Lim[] = {
-        1.1644f, 1.1644f, 1.1644f,
-        0.0f, -0.3917f, 2.0172f,
-        1.5960f, -0.8129f, 0.0f
-    };
-    static const float bt601Full[] = {
-        1.0f, 1.0f, 1.0f,
-        0.0f, -0.3441f, 1.7720f,
-        1.4020f, -0.7141f, 0.0f
-    };
-    static const float bt709Lim[] = {
-        1.1644f, 1.1644f, 1.1644f,
-        0.0f, -0.2132f, 2.1124f,
-        1.7927f, -0.5329f, 0.0f
-    };
-    static const float bt709Full[] = {
-        1.0f, 1.0f, 1.0f,
-        0.0f, -0.1873f, 1.8556f,
-        1.5748f, -0.4681f, 0.0f
-    };
-    static const float bt2020Lim[] = {
-        1.1644f, 1.1644f, 1.1644f,
-        0.0f, -0.1874f, 2.1418f,
-        1.6781f, -0.6505f, 0.0f
-    };
-    static const float bt2020Full[] = {
-        1.0f, 1.0f, 1.0f,
-        0.0f, -0.1646f, 1.8814f,
-        1.4746f, -0.5714f, 0.0f
-    };
-
-    bool fullRange = isFrameFullRange(frame);
-    switch (getFrameColorspace(frame)) {
-        case COLORSPACE_REC_601:
-            return fullRange ? bt601Full : bt601Lim;
-        case COLORSPACE_REC_709:
-            return fullRange ? bt709Full : bt709Lim;
-        case COLORSPACE_REC_2020:
-            return fullRange ? bt2020Full : bt2020Lim;
-        default:
-            SDL_assert(false);
-    }
-
-    return bt601Lim;
-}
-
-bool EGLRenderer::specialize() {
-    SDL_assert(!m_VAO);
-
-    // Ensure context is current before compiling shaders
-    // This is critical for Mali blob driver
-    int makeCurrentResult = SDL_GL_MakeCurrent(m_Window, m_Context);
-    if (makeCurrentResult != 0) {
-        EGL_LOG(Error, "SDL_GL_MakeCurrent() failed in specialize(): %s (error code: %d)", 
-                SDL_GetError(), makeCurrentResult);
-        EGLint eglErr = eglGetError();
-        EGL_LOG(Error, "eglGetError() = 0x%x", eglErr);
-        return false;
-    }
-    
-    // Verify context is actually current
-    if (eglGetCurrentContext() == EGL_NO_CONTEXT) {
-        EGL_LOG(Error, "No EGL context is current after SDL_GL_MakeCurrent() in specialize()");
-        EGLint eglErr = eglGetError();
-        EGL_LOG(Error, "eglGetError() = 0x%x", eglErr);
-        return false;
-    }
-    
-    // Clear any GL errors that may have occurred during texture/buffer setup
-    GLenum err;
-    while ((err = glGetError()) != GL_NO_ERROR) {
-        EGL_LOG(Warn, "Clearing GL error before shader compilation: 0x%x", err);
-    }
-
-    if (!compileShaders())
-        return false;
-
-    // The viewport should have the aspect ratio of the video stream
-    static const VERTEX vertices[] = {
-        // pos .... // tex coords
-        { 1.0f, 1.0f, 1.0f, 0.0f },
-        { -1.0f, 1.0f, 0.0f, 0.0f },
-        { -1.0f, -1.0f, 0.0f, 1.0f },
-        { -1.0f, -1.0f, 0.0f, 1.0f },
-        { 1.0f, -1.0f, 1.0f, 1.0f },
-        { 1.0f, 1.0f, 1.0f, 0.0f },
-    };
-
-    // Mali blob workaround: Get GL buffer/vertex functions
-    typedef void (*PFNGLGENBUFFERSPROC)(GLsizei n, GLuint *buffers);
-    typedef void (*PFNGLBINDBUFFERPROC)(GLenum target, GLuint buffer);
-    typedef void (*PFNGLBUFFERDATAPROC)(GLenum target, GLsizeiptr size, const void *data, GLenum usage);
-    typedef void (*PFNGLVERTEXATTRIBPOINTERPROC)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
-    typedef void (*PFNGLENABLEVERTEXATTRIBARRAYPROC)(GLuint index);
-    typedef void (*PFNGLDELETEBUFFERSPROC)(GLsizei n, const GLuint *buffers);
-    
-    PFNGLGENBUFFERSPROC glGenBuffersFn = (PFNGLGENBUFFERSPROC)SDL_GL_GetProcAddress("glGenBuffers");
-    PFNGLBINDBUFFERPROC glBindBufferFn = (PFNGLBINDBUFFERPROC)SDL_GL_GetProcAddress("glBindBuffer");
-    PFNGLBUFFERDATAPROC glBufferDataFn = (PFNGLBUFFERDATAPROC)SDL_GL_GetProcAddress("glBufferData");
-    PFNGLVERTEXATTRIBPOINTERPROC glVertexAttribPointerFn = (PFNGLVERTEXATTRIBPOINTERPROC)SDL_GL_GetProcAddress("glVertexAttribPointer");
-    PFNGLENABLEVERTEXATTRIBARRAYPROC glEnableVertexAttribArrayFn = (PFNGLENABLEVERTEXATTRIBARRAYPROC)SDL_GL_GetProcAddress("glEnableVertexAttribArray");
-    PFNGLDELETEBUFFERSPROC glDeleteBuffersFn = (PFNGLDELETEBUFFERSPROC)SDL_GL_GetProcAddress("glDeleteBuffers");
-    
-    if (!glGenBuffersFn || !glBindBufferFn || !glBufferDataFn || 
-        !glVertexAttribPointerFn || !glEnableVertexAttribArrayFn || !glDeleteBuffersFn) {
-        EGL_LOG(Error, "Failed to get GL buffer/vertex function pointers in specialize()");
-        return false;
-    }
-    
-    // Setup the VAO and VBO
-    unsigned int VBO;
-    m_glGenVertexArraysOES(1, &m_VideoVAO);
-    glGenBuffersFn(1, &VBO);
-
-    m_glBindVertexArrayOES(m_VideoVAO);
-
-    glBindBufferFn(GL_ARRAY_BUFFER, VBO);
-    glBufferDataFn(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    // compileShader() ensures that aPosition and aTexCoord are indexes 0 and 1 respectively
-    glVertexAttribPointerFn(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)offsetof(VERTEX, x));
-    glEnableVertexAttribArrayFn(0);
-    glVertexAttribPointerFn(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)offsetof(VERTEX, u));
-    glEnableVertexAttribArrayFn(1);
-
-    glBindBufferFn(GL_ARRAY_BUFFER, 0);
-    m_glBindVertexArrayOES(0);
-
-    glDeleteBuffersFn(1, &VBO);
-
-    typedef GLenum (*PFNGLGETERRORPROC)(void);
-    PFNGLGETERRORPROC glGetErrorFn = (PFNGLGETERRORPROC)SDL_GL_GetProcAddress("glGetError");
-    GLenum err = glGetErrorFn ? glGetErrorFn() : GL_NO_ERROR;
-    if (err != GL_NO_ERROR) {
-        EGL_LOG(Error, "OpenGL error: %d", err);
-    }
-
-    return err == GL_NO_ERROR;
-}
-
-bool EGLRenderer::setupOverlayRenderingState() {
-    // Create overlay textures, VBOs, and VAOs
-    glGenBuffers(Overlay::OverlayMax, m_OverlayVBOs);
-    glGenTextures(Overlay::OverlayMax, m_OverlayTextures);
-    m_glGenVertexArraysOES(Overlay::OverlayMax, m_OverlayVAOs);
-
-    for (size_t i = 0; i < Overlay::OverlayMax; ++i) {
-        // Set up the overlay texture
-        glBindTexture(GL_TEXTURE_2D, m_OverlayTextures[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        // Create the VAO for the overlay
-        m_glBindVertexArrayOES(m_OverlayVAOs[i]);
-        glBindBuffer(GL_ARRAY_BUFFER, m_OverlayVBOs[i]);
-
-        // compileShader() ensures that aPosition and aTexCoord are indexes 0 and 1 respectively
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)offsetof(VERTEX, x));
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)offsetof(VERTEX, u));
-        glEnableVertexAttribArray(1);
-
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        m_glBindVertexArrayOES(0);
-    }
-
-    // Enable alpha blending
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
->>>>>>> upstream/master
-
-    err = glGetError();
-    if (err != GL_NO_ERROR) {
-        EGL_LOG(Error, "OpenGL error: %d", err);
-    }
-
-    return err == GL_NO_ERROR;
-}
-
 void EGLRenderer::cleanupRenderContext()
 {
     // Detach the context from the render thread so the destructor can attach it
@@ -1275,14 +1138,12 @@ void EGLRenderer::renderFrame(AVFrame* frame)
 
     // Mali blob workaround: Get GL render function pointers
     typedef void (*PFNGLUSEPROGRAMPROC)(GLuint program);
-    typedef void (*PFNGLUNIFORM1IPROC)(GLint location, GLint v0);
     typedef void (*PFNGLUNIFORM2FVPROC)(GLint location, GLsizei count, const GLfloat *value);
     typedef void (*PFNGLUNIFORM3FVPROC)(GLint location, GLsizei count, const GLfloat *value);
     typedef void (*PFNGLUNIFORMMATRIX3FVPROC)(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value);
     typedef void (*PFNGLDRAWARRAYSPROC)(GLenum mode, GLint first, GLsizei count);
     
     PFNGLUSEPROGRAMPROC glUseProgramFn = (PFNGLUSEPROGRAMPROC)SDL_GL_GetProcAddress("glUseProgram");
-    PFNGLUNIFORM1IPROC glUniform1iFn = (PFNGLUNIFORM1IPROC)SDL_GL_GetProcAddress("glUniform1i");
     PFNGLUNIFORM2FVPROC glUniform2fvFn = (PFNGLUNIFORM2FVPROC)SDL_GL_GetProcAddress("glUniform2fv");
     PFNGLUNIFORM3FVPROC glUniform3fvFn = (PFNGLUNIFORM3FVPROC)SDL_GL_GetProcAddress("glUniform3fv");
     PFNGLUNIFORMMATRIX3FVPROC glUniformMatrix3fvFn = (PFNGLUNIFORMMATRIX3FVPROC)SDL_GL_GetProcAddress("glUniformMatrix3fv");
