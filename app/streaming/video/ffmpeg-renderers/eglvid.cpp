@@ -77,8 +77,7 @@ EGLRenderer::EGLRenderer(IFFmpegRenderer *backendRenderer)
         m_eglClientWaitSync(nullptr),
         m_GlesMajorVersion(0),
         m_GlesMinorVersion(0),
-        m_HasExtUnpackSubimage(false),
-        m_DummyRenderer(nullptr)
+        m_HasExtUnpackSubimage(false)
 {
     SDL_assert(backendRenderer);
     SDL_assert(backendRenderer->canExportEGL());
@@ -112,10 +111,6 @@ EGLRenderer::~EGLRenderer()
         }
 
         SDL_GL_DeleteContext(m_Context);
-    }
-
-    if (m_DummyRenderer) {
-        SDL_DestroyRenderer(m_DummyRenderer);
     }
 }
 
@@ -641,8 +636,13 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
         return false;
     }
 
-    m_DummyRenderer = SDL_CreateRenderer(m_Window, renderIndex, SDL_RENDERER_ACCELERATED);
-    if (!m_DummyRenderer) {
+    // This will load OpenGL ES and convert our window to SDL_WINDOW_OPENGL if necessary
+    SDL_Renderer* dummyRenderer = SDL_CreateRenderer(m_Window, renderIndex, SDL_RENDERER_ACCELERATED);
+    if (dummyRenderer) {
+        SDL_DestroyRenderer(dummyRenderer);
+        dummyRenderer = nullptr;
+    }
+    else {
         // Print the error here (before it gets clobbered), but ensure that we flush window
         // events just in case SDL re-created the window before eventually failing.
         EGL_LOG(Error, "SDL_CreateRenderer() failed: %s", SDL_GetError());
@@ -659,16 +659,10 @@ bool EGLRenderer::initialize(PDECODER_PARAMETERS params)
         // to ensure we don't drop any important events.
         session->flushWindowEvents();
     }
-    else {
+    else if (!params->testOnly) {
         // If we get here prior to the start of a session, just pump and flush ourselves.
         SDL_PumpEvents();
         SDL_FlushEvent(SDL_WINDOWEVENT);
-    }
-
-    // Now we finally bail if we failed during SDL_CreateRenderer() above.
-    if (!m_DummyRenderer) {
-        m_InitFailureReason = InitFailureReason::NoSoftwareSupport;
-        return false;
     }
 
     SDL_SysWMinfo info;
@@ -971,8 +965,8 @@ bool EGLRenderer::setupOverlayRenderingState() {
     for (size_t i = 0; i < Overlay::OverlayMax; ++i) {
         // Set up the overlay texture
         glBindTextureFn(GL_TEXTURE_2D, m_OverlayTextures[i]);
-        glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteriFn(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -1085,6 +1079,16 @@ void EGLRenderer::renderFrame(AVFrame* frame)
         }
     }
 
+    int drawableWidth, drawableHeight;
+    SDL_GL_GetDrawableSize(m_Window, &drawableWidth, &drawableHeight);
+    SDL_Rect src, dst;
+    src.x = src.y = dst.x = dst.y = 0;
+    src.w = frame->width;
+    src.h = frame->height;
+    dst.w = drawableWidth;
+    dst.h = drawableHeight;
+    StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+
     ssize_t plane_count = m_Backend->exportEGLImages(frame, m_EGLDisplay, imgs);
     if (plane_count < 0) {
         EGL_LOG(Error, "exportEGLImages failed");
@@ -1094,9 +1098,13 @@ void EGLRenderer::renderFrame(AVFrame* frame)
     // Mali blob workaround: Get GL function pointers via SDL_GL_GetProcAddress
     typedef void (*PFNGLACTIVETEXTUREPROC)(GLenum texture);
     typedef void (*PFNGLBINDTEXTUREPROC)(GLenum target, GLuint texture);
+    typedef void (*PFNGLTEXPARAMETERIPROC)(GLenum target, GLenum pname, GLint param);
+    typedef GLenum (*PFNGLGETERRORPROC)(void);
     PFNGLACTIVETEXTUREPROC glActiveTextureFn = (PFNGLACTIVETEXTUREPROC)SDL_GL_GetProcAddress("glActiveTexture");
     PFNGLBINDTEXTUREPROC glBindTextureFn = (PFNGLBINDTEXTUREPROC)SDL_GL_GetProcAddress("glBindTexture");
-    
+    PFNGLTEXPARAMETERIPROC glTexParameteriFn = (PFNGLTEXPARAMETERIPROC)SDL_GL_GetProcAddress("glTexParameteri");
+    PFNGLGETERRORPROC glGetErrorFn = (PFNGLGETERRORPROC)SDL_GL_GetProcAddress("glGetError");
+
     if (!glActiveTextureFn || !glBindTextureFn) {
         EGL_LOG(Error, "Failed to get glActiveTexture or glBindTexture function pointers");
         return;
@@ -1105,9 +1113,24 @@ void EGLRenderer::renderFrame(AVFrame* frame)
         glActiveTextureFn(GL_TEXTURE0 + i);
         glBindTextureFn(GL_TEXTURE_EXTERNAL_OES, m_Textures[i]);
         m_glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, imgs[i]);
-        GLenum err = glGetError();
-        if (err != GL_NO_ERROR) {
-            EGL_LOG(Error, "Failed to bind texture %d: 0x%x", (int)i, err);
+
+        if (glGetErrorFn) {
+            GLenum err = glGetErrorFn();
+            if (err != GL_NO_ERROR) {
+                EGL_LOG(Error, "Failed to bind texture %d: 0x%x", (int)i, err);
+            }
+        }
+
+        // Use GL_NEAREST to reduce sampling if the video region is a multiple of the frame size
+        if (glTexParameteriFn) {
+            if (dst.w % frame->width == 0 && dst.h % frame->height == 0) {
+                glTexParameteriFn(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteriFn(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            }
+            else {
+                glTexParameteriFn(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteriFn(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            }
         }
     }
 
@@ -1121,17 +1144,7 @@ void EGLRenderer::renderFrame(AVFrame* frame)
         glClearFn(GL_COLOR_BUFFER_BIT);
     }
 
-    int drawableWidth, drawableHeight;
-    SDL_GL_GetDrawableSize(m_Window, &drawableWidth, &drawableHeight);
-
-    // Set the viewport to the size of the aspect-ratio-scaled video
-    SDL_Rect src, dst;
-    src.x = src.y = dst.x = dst.y = 0;
-    src.w = frame->width;
-    src.h = frame->height;
-    dst.w = drawableWidth;
-    dst.h = drawableHeight;
-    StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+    // Set the viewport to the size of the aspect-ratio-scaled video (src/dst already computed above)
     typedef void (*PFNGLVIEWPORTPROC)(GLint x, GLint y, GLsizei width, GLsizei height);
     PFNGLVIEWPORTPROC glViewportFn = (PFNGLVIEWPORTPROC)SDL_GL_GetProcAddress("glViewport");
     if (glViewportFn) glViewportFn(dst.x, dst.y, dst.w, dst.h);
